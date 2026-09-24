@@ -5,8 +5,8 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { createApp } from '../src/app.js';
 import { Store } from '../src/store.js';
+import { vec } from './fixtures.js';
 
-const vec = (v) => Array(128).fill(v);
 // 最小の JPEG ヘッダ（マジックバイト確認用）
 const JPEG = `data:image/jpeg;base64,${Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0, 0x10]).toString('base64')}`;
 
@@ -27,7 +27,7 @@ async function call(method, url, body) {
 before(async () => {
   dir = await fs.mkdtemp(path.join(os.tmpdir(), 'face-history-'));
   const store = await new Store(dir, { maxHistory: 50 }).init();
-  server = createApp(store, { threshold: 0.5, maxSamples: 5 }).listen(0);
+  server = createApp(store, { threshold: 0.5, maxSamples: 5, liveness: false }).listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
 });

@@ -6,6 +6,7 @@ const PORT = Number(process.env.PORT ?? 3000);
 const HOST = process.env.HOST ?? '127.0.0.1';
 const DATA_DIR = path.resolve(process.env.DATA_DIR ?? 'data');
 const THRESHOLD = Number(process.env.FACE_THRESHOLD ?? 0.5);
+const LIVENESS = (process.env.LIVENESS ?? 'on').toLowerCase() !== 'off';
 
 if (!Number.isFinite(THRESHOLD) || THRESHOLD <= 0 || THRESHOLD >= 2) {
   console.error('FACE_THRESHOLD は 0〜2 の数値で指定してください（推奨 0.4〜0.6）');
@@ -13,9 +14,9 @@ if (!Number.isFinite(THRESHOLD) || THRESHOLD <= 0 || THRESHOLD >= 2) {
 }
 
 const store = await new Store(DATA_DIR).init();
-const app = createApp(store, { threshold: THRESHOLD });
+const app = createApp(store, { threshold: THRESHOLD, liveness: LIVENESS });
 
 app.listen(PORT, HOST, () => {
   console.log(`face-history: http://${HOST === '0.0.0.0' ? 'localhost' : HOST}:${PORT}`);
-  console.log(`data dir: ${DATA_DIR} / threshold: ${THRESHOLD}`);
+  console.log(`data dir: ${DATA_DIR} / threshold: ${THRESHOLD} / liveness: ${LIVENESS ? 'on' : 'off'}`);
 });

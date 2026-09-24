@@ -18,6 +18,11 @@
         <video id="video" autoplay muted playsinline></video>
         <canvas id="overlay"></canvas>
         <div id="camera-placeholder" class="camera-placeholder">カメラは停止中です</div>
+        <div id="challenge-prompt" class="challenge-prompt" role="status" aria-live="assertive" hidden>
+          <span id="challenge-step" class="challenge-step"></span>
+          <strong id="challenge-text"></strong>
+          <span class="challenge-timer"><span id="challenge-timer"></span></span>
+        </div>
       </div>
       <div class="camera-actions">
         <button id="camera-toggle" class="btn" type="button">カメラを起動</button>
@@ -35,10 +40,10 @@
 
       <!-- 認証 -->
       <div class="tab-panel active" id="panel-auth" role="tabpanel">
-        <p class="hint">カメラに顔を正面から映して「認証する」を押してください。</p>
+        <p id="auth-hint" class="hint">カメラに顔を正面から映して「認証する」を押してください。</p>
         <div class="row">
           <button id="auth-camera" class="btn primary" type="button" disabled>認証する</button>
-          <label class="btn file-btn">画像で認証
+          <label id="auth-file-label" class="btn file-btn" hidden>画像で認証
             <input id="auth-file" type="file" accept="image/*" hidden>
           </label>
         </div>

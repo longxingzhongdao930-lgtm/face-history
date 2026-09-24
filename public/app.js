@@ -1,9 +1,13 @@
 import * as faceapi from '/vendor/face-api/face-api.esm.js';
+import { ACTIONS, ChallengeTracker, LIVENESS, faceMetrics } from '/shared/liveness.js';
 
 const REGISTER_SAMPLES = 3;
 const SAMPLE_INTERVAL_MS = 600;
 const LIVE_INTERVAL_MS = 250;
 const HISTORY_PAGE = 30;
+/** ライブネス検知のフレーム間隔（サーバーのフレーム数上限を超えないように間引く） */
+const LIVENESS_FRAME_MS = 70;
+const LIVENESS_TIMEOUT_MS = 25_000;
 
 const $ = (sel) => document.querySelector(sel);
 const els = {
@@ -15,6 +19,12 @@ const els = {
   faceIndicator: $('#face-indicator'),
   authCamera: $('#auth-camera'),
   authFile: $('#auth-file'),
+  authFileLabel: $('#auth-file-label'),
+  authHint: $('#auth-hint'),
+  challengePrompt: $('#challenge-prompt'),
+  challengeStep: $('#challenge-step'),
+  challengeText: $('#challenge-text'),
+  challengeTimer: $('#challenge-timer'),
   authResult: $('#auth-result'),
   registerName: $('#register-name'),
   registerCamera: $('#register-camera'),
@@ -36,6 +46,7 @@ const state = {
   liveTimer: null,
   busy: false,
   historyOffset: 0,
+  config: { liveness: false },
 };
 
 // ---------------------------------------------------------------- utilities
@@ -77,6 +88,12 @@ function showResult(target, kind, title, meta) {
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** 次の描画まで待ち、さらに残り時間があれば待つ */
+async function nextPaint(minWaitMs = 0) {
+  await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+  if (minWaitMs > 0) await sleep(minWaitMs);
+}
 
 const formatDate = (iso) => new Date(iso).toLocaleString('ja-JP');
 
@@ -136,9 +153,9 @@ async function loadModels() {
  * 入力（video / img）から顔を 1 つだけ抽出する。
  * @returns {{ descriptor: number[], box: faceapi.Box, score: number }}
  */
-async function extractFace(input) {
+async function extractFace(input, options = detectorOptions()) {
   const results = await faceapi
-    .detectAllFaces(input, detectorOptions())
+    .detectAllFaces(input, options)
     .withFaceLandmarks()
     .withFaceDescriptors();
   if (results.length === 0) throw new Error('顔が検出できませんでした。明るい場所で正面を向いてください。');
@@ -258,10 +275,104 @@ async function authenticate(input) {
   return api('/auth', { method: 'POST', body: { descriptor: face.descriptor, snapshot } });
 }
 
+const round1 = (v) => Math.round(v * 10) / 10;
+
+function showPrompt(step, text, remainingMs) {
+  els.challengePrompt.hidden = false;
+  els.challengeStep.textContent = step;
+  els.challengeText.textContent = text;
+  els.challengeTimer.style.transform = `scaleX(${Math.max(0, remainingMs / LIVENESS_TIMEOUT_MS)})`;
+}
+
+function hidePrompt() {
+  els.challengePrompt.hidden = true;
+}
+
+/**
+ * ライブネス検知付きの認証。
+ * サーバーから受け取ったランダムな動作を指示し、ランドマークの推移を記録して送る。
+ * サーバーは同じ判定ロジックで記録を再検証する。
+ */
+async function authenticateWithLiveness() {
+  const video = els.video;
+  const challenge = await api('/liveness/challenge', { method: 'POST' });
+  const actions = challenge.actions.map((a) => a.id);
+  const tracker = new ChallengeTracker(actions);
+  const frames = [];
+  const checkpoints = [];
+  const timeout = Math.min(LIVENESS_TIMEOUT_MS, challenge.ttlMs - 5000);
+
+  try {
+    showPrompt('準備', 'カメラの正面を向いてください', timeout);
+    await nextPaint();
+    // 開始時点の顔（最終的に照合する顔と同一人物かをサーバーで確認する）
+    checkpoints.push((await extractFace(video)).descriptor);
+
+    const start = performance.now();
+    while (!tracker.done) {
+      const elapsed = performance.now() - start;
+      // 時間切れでも記録はサーバーへ送り、失敗（なりすまし疑い）として履歴に残す
+      if (elapsed > timeout || frames.length >= LIVENESS.maxFrames) break;
+      const step = tracker.calibrating ? '準備' : `${tracker.index + 1} / ${actions.length}`;
+      const text = tracker.calibrating ? 'カメラの正面を向いてください' : ACTIONS[tracker.current];
+      showPrompt(step, text, timeout - elapsed);
+
+      const frameStart = performance.now();
+      const detections = await faceapi.detectAllFaces(video, liveOptions()).withFaceLandmarks();
+      drawOverlay(detections.map((d) => d.detection));
+      if (detections.length > 1) throw new Error('複数の顔が検出されました。1 人だけ映るようにしてください。');
+      if (detections.length === 1) {
+        const points = detections[0].landmarks.positions.map((p) => [round1(p.x), round1(p.y)]);
+        frames.push({ t: Math.round(frameStart - start), points });
+        const completed = tracker.push(points, frames.length - 1);
+        if (completed) {
+          // 動作直後の顔も記録（横向き等で取れない場合は開始時・最終の顔で判定）。
+          // 遅い端末でも止まらないよう軽量な検出器を使う
+          try {
+            checkpoints.push((await extractFace(video, liveOptions())).descriptor);
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+      // 処理が遅い端末でも毎フレーム描画の機会を与える（指示文・タイマーを更新するため）
+      await nextPaint(LIVENESS_FRAME_MS - (performance.now() - frameStart));
+    }
+
+    showPrompt('照合', '正面を向いたまま静止してください', 0);
+    await nextPaint();
+    // 照合精度を上げるため、顔が正面に戻るまで待ってから撮影する
+    if (tracker.done) await waitForFrontal(video, 5000);
+    const face = await extractFace(video);
+    const snapshot = makeSnapshot(video, face.box);
+    return await api('/auth', {
+      method: 'POST',
+      body: { descriptor: face.descriptor, snapshot, liveness: { challengeId: challenge.id, frames, checkpoints } },
+    });
+  } finally {
+    hidePrompt();
+  }
+}
+
+async function waitForFrontal(video, maxWaitMs) {
+  const until = performance.now() + maxWaitMs;
+  while (performance.now() < until) {
+    const d = await faceapi.detectSingleFace(video, liveOptions()).withFaceLandmarks();
+    if (d) {
+      drawOverlay([d.detection]);
+      const { yaw } = faceMetrics(d.landmarks.positions.map((p) => [p.x, p.y]));
+      if (Math.abs(yaw) <= LIVENESS.frontalYaw) return;
+    }
+    await nextPaint(LIVENESS_FRAME_MS);
+  }
+}
+
 function showAuthResult(res) {
   const meta = `距離 ${res.distance ?? '—'}（しきい値 ${res.threshold}）・${formatDate(new Date().toISOString())}`;
   if (res.result === 'success') {
     showResult(els.authResult, 'success', `認証成功: ${res.user.name} さん`, meta);
+  } else if (res.reason === 'liveness') {
+    showResult(els.authResult, 'failure', '認証失敗: ライブネス検知に失敗しました', `${res.detail ?? ''}・${meta}`);
   } else {
     showResult(els.authResult, 'failure', '認証失敗: 登録済みの顔と一致しません', meta);
   }
@@ -271,7 +382,8 @@ function showAuthResult(res) {
 els.authCamera.addEventListener('click', () => withBusy(async () => {
   showResult(els.authResult, 'info', '認証中…');
   try {
-    showAuthResult(await authenticate(els.video));
+    const res = state.config.liveness ? await authenticateWithLiveness() : await authenticate(els.video);
+    showAuthResult(res);
   } catch (err) {
     showResult(els.authResult, 'failure', err.message);
   }
@@ -419,7 +531,10 @@ function historyItem(h) {
 
   let title;
   let badge;
-  if (h.type === 'auth') {
+  if (h.type === 'auth' && h.reason === 'liveness') {
+    title = h.candidateName ? `${h.candidateName}（なりすまし疑い）` : '不明な人物（なりすまし疑い）';
+    badge = el('span', { className: 'badge failure', textContent: 'ライブネス失敗' });
+  } else if (h.type === 'auth') {
     title = h.result === 'success' ? h.userName : '不明な人物';
     badge = el('span', { className: `badge ${h.result}`, textContent: h.result === 'success' ? '認証成功' : '認証失敗' });
   } else {
@@ -428,6 +543,8 @@ function historyItem(h) {
   }
   const sub = [formatDate(h.timestamp)];
   if (h.distance != null) sub.push(`距離 ${h.distance}`);
+  if (h.liveness === 'passed') sub.push('ライブネス OK');
+  if (h.detail) sub.push(h.detail);
 
   return el('li', {}, [
     thumb,
@@ -496,6 +613,20 @@ document.querySelectorAll('.tab').forEach((tab) => {
 
 els.cameraToggle.addEventListener('click', () => (state.stream ? stopCamera() : startCamera()));
 
+async function loadConfig() {
+  try {
+    state.config = await api('/config');
+  } catch (err) {
+    toast(`設定を取得できません: ${err.message}`);
+  }
+  // ライブネス検知が有効なときは、写真での認証（なりすましと区別できない）を無効にする
+  els.authFileLabel.hidden = state.config.liveness;
+  els.authHint.textContent = state.config.liveness
+    ? 'カメラに顔を正面から映して「認証する」を押し、画面の指示（まばたき・顔の向き・口を開ける）に従ってください。'
+    : 'カメラに顔を正面から映して「認証する」を押してください。';
+}
+
 updateButtons();
+loadConfig();
 refreshUsers();
 loadModels();
