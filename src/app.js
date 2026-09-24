@@ -1,13 +1,18 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { findBestMatch, isValidDescriptor } from './matcher.js';
+import { ACTIONS, verifyFrames } from '../public/shared/liveness.js';
+import { ChallengeStore } from './challenges.js';
+import { euclideanDistance, findBestMatch, isValidDescriptor } from './matcher.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const FACE_API_DIR = path.join(ROOT, 'node_modules', '@vladmandic', 'face-api');
 
 const MAX_NAME_LENGTH = 50;
 const MAX_SNAPSHOT_BYTES = 300 * 1024;
+const MAX_CHECKPOINTS = 10;
+/** クライアントとサーバーの時刻処理の差を吸収する許容誤差 */
+const CLOCK_SLACK_MS = 2000;
 
 class HttpError extends Error {
   constructor(status, message, extra = {}) {
@@ -49,6 +54,34 @@ function parseSnapshot(value) {
   return buf;
 }
 
+/**
+ * ライブネスの証跡を検証する。
+ * @returns {string|null} 失敗理由（成功なら null）
+ */
+function checkLiveness(challenge, evidence, descriptor, { consistency, now }) {
+  const { frames, checkpoints } = evidence;
+  const result = verifyFrames(challenge.actions, frames);
+  if (!result.ok) return result.reason;
+
+  // 記録された時間がチャレンジ発行からの経過時間を超えることはない
+  const span = frames.at(-1).t - frames[0].t;
+  if (span > now - challenge.issuedAt + CLOCK_SLACK_MS) return 'フレームの時刻が不正です';
+
+  // 動作中の顔と最終的に照合する顔が同一人物か（途中で写真に差し替えていないか）
+  if (
+    !Array.isArray(checkpoints) ||
+    checkpoints.length < 1 ||
+    checkpoints.length > MAX_CHECKPOINTS ||
+    !checkpoints.every(isValidDescriptor)
+  ) {
+    return '動作中の顔データが不正です';
+  }
+  if (checkpoints.some((c) => euclideanDistance(c, descriptor) > consistency)) {
+    return '動作中に別の顔が検出されました';
+  }
+  return null;
+}
+
 function parseLimit(value, fallback, max) {
   const n = Number.parseInt(value, 10);
   if (!Number.isFinite(n) || n < 0) return fallback;
@@ -59,10 +92,19 @@ function parseLimit(value, fallback, max) {
  * @param {import('./store.js').Store} store
  * @param {{ threshold?: number, maxSamples?: number }} options
  */
-export function createApp(store, { threshold = 0.5, maxSamples = 10 } = {}) {
+export function createApp(
+  store,
+  {
+    threshold = 0.5,
+    maxSamples = 10,
+    liveness = true,
+    livenessConsistency = 0.6,
+    challenges = new ChallengeStore(),
+  } = {},
+) {
   const app = express();
   app.disable('x-powered-by');
-  app.use(express.json({ limit: '1mb' }));
+  app.use(express.json({ limit: '2mb' }));
 
   // ---- static ----
   app.use(express.static(path.join(ROOT, 'public')));
@@ -73,7 +115,19 @@ export function createApp(store, { threshold = 0.5, maxSamples = 10 } = {}) {
   const api = express.Router();
 
   api.get('/config', (req, res) => {
-    res.json({ threshold, maxSamples });
+    res.json({ threshold, maxSamples, liveness, challengeTtlMs: challenges.ttlMs });
+  });
+
+  // ライブネス検知: ランダムな動作指示を発行
+  api.post('/liveness/challenge', (req, res) => {
+    if (!liveness) throw new HttpError(404, 'ライブネス検知は無効です');
+    const c = challenges.issue();
+    res.status(201).json({
+      id: c.id,
+      actions: c.actions.map((id) => ({ id, label: ACTIONS[id] })),
+      expiresAt: new Date(c.expiresAt).toISOString(),
+      ttlMs: challenges.ttlMs,
+    });
   });
 
   api.get('/users', (req, res) => {
@@ -136,23 +190,54 @@ export function createApp(store, { threshold = 0.5, maxSamples = 10 } = {}) {
       throw new HttpError(400, 'descriptor の形式が不正です（128 次元の数値配列が必要）');
     }
     const snapshot = parseSnapshot(req.body.snapshot);
+
+    let livenessStatus = 'skipped';
+    let livenessReason = null;
+    if (liveness) {
+      const evidence = req.body.liveness;
+      if (!evidence || typeof evidence !== 'object') {
+        throw new HttpError(400, 'ライブネス検知の結果（liveness）が必要です');
+      }
+      const challenge = challenges.consume(evidence.challengeId);
+      if (!challenge) {
+        throw new HttpError(400, 'チャレンジが無効か期限切れです。もう一度やり直してください');
+      }
+      livenessReason = checkLiveness(challenge, evidence, descriptor, {
+        consistency: livenessConsistency,
+        now: Date.now(),
+      });
+      livenessStatus = livenessReason ? 'failed' : 'passed';
+    }
+
     const match = findBestMatch(descriptor, store.listUsers(), threshold);
     const distance = match.distance == null ? null : Number(match.distance.toFixed(4));
+    const success = match.matched && livenessStatus !== 'failed';
 
-    const record = await store.addHistory(
-      {
-        type: 'auth',
-        result: match.matched ? 'success' : 'failure',
-        userId: match.matched ? match.user.id : null,
-        userName: match.matched ? match.user.name : null,
-        distance,
-      },
-      snapshot,
-    );
+    const entry = {
+      type: 'auth',
+      result: success ? 'success' : 'failure',
+      userId: success ? match.user.id : null,
+      userName: success ? match.user.name : null,
+      distance,
+      liveness: livenessStatus,
+    };
+    if (!success) {
+      entry.reason = livenessStatus === 'failed' ? 'liveness' : 'no_match';
+      if (livenessReason) entry.detail = livenessReason;
+      // なりすまし疑いの場合、誰の顔が提示されたかを記録する
+      if (livenessStatus === 'failed' && match.matched) {
+        entry.candidateId = match.user.id;
+        entry.candidateName = match.user.name;
+      }
+    }
+    const record = await store.addHistory(entry, snapshot);
 
     res.json({
       result: record.result,
-      user: match.matched ? publicUser(match.user) : null,
+      reason: record.reason ?? null,
+      detail: record.detail ?? null,
+      liveness: livenessStatus,
+      user: success ? publicUser(match.user) : null,
       distance,
       threshold,
       historyId: record.id,
