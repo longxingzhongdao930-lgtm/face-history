@@ -5,7 +5,7 @@ import path from 'node:path';
 import { after, before, test } from 'node:test';
 import { createApp } from '../src/app.js';
 import { Store } from '../src/store.js';
-import { face, framesFor, vec } from './fixtures.js';
+import { face, framesFor, liveEvidence, staticFrames, vec } from './fixtures.js';
 
 let dir;
 let server;
@@ -32,7 +32,12 @@ before(async () => {
   server = createApp(store, { threshold: 0.5 }).listen(0);
   await new Promise((r) => server.once('listening', r));
   base = `http://127.0.0.1:${server.address().port}`;
-  await call('POST', '/api/users', { name: 'Alice', descriptors: [vec(0.1)] });
+  const res = await call('POST', '/api/users', {
+    name: 'Alice',
+    descriptors: [vec(0.1)],
+    liveness: await liveEvidence(call, [vec(0.1)]),
+  });
+  assert.equal(res.status, 201);
 });
 
 after(async () => {
@@ -121,4 +126,65 @@ test('ライブネスは通っても未登録の顔なら no_match', async () =>
   assert.equal(res.body.result, 'failure');
   assert.equal(res.body.reason, 'no_match');
   assert.equal(res.body.liveness, 'passed');
+});
+
+test('登録: ライブネスの証跡がなければ 400', async () => {
+  const res = await call('POST', '/api/users', { name: 'Bob', descriptors: [vec(0.5)] });
+  assert.equal(res.status, 400);
+});
+
+test('登録: 写真（動きなし）では 422 になり、失敗が履歴に残る', async () => {
+  const res = await call('POST', '/api/users', {
+    name: 'Bob',
+    descriptors: [vec(0.5)],
+    liveness: await liveEvidence(call, [vec(0.5)], { frames: staticFrames() }),
+  });
+  assert.equal(res.status, 422);
+  assert.equal(res.body.reason, 'liveness');
+  assert.equal((await call('GET', '/api/users')).body.some((u) => u.name === 'Bob'), false);
+
+  const h = (await call('GET', '/api/history?type=register&result=failure')).body.items[0];
+  assert.equal(h.userName, 'Bob');
+  assert.equal(h.reason, 'liveness');
+  assert.equal(h.userId, null);
+});
+
+test('登録: 動作中の顔と登録する顔が別人なら 422', async () => {
+  const res = await call('POST', '/api/users', {
+    name: 'Bob',
+    descriptors: [vec(0.5), vec(0.51)],
+    liveness: await liveEvidence(call, [vec(0.9)]),
+  });
+  assert.equal(res.status, 422);
+  assert.match(res.body.detail, /別の顔/);
+});
+
+test('登録: 指示どおりの動作なら 201（ライブネス結果が履歴に残る）', async () => {
+  const res = await call('POST', '/api/users', {
+    name: 'Bob',
+    descriptors: [vec(0.5), vec(0.51)],
+    liveness: await liveEvidence(call, [vec(0.5)]),
+  });
+  assert.equal(res.status, 201);
+  const h = (await call('GET', '/api/history?type=register&result=success')).body.items[0];
+  assert.equal(h.userName, 'Bob');
+  assert.equal(h.liveness, 'passed');
+});
+
+test('サンプル追加: ライブネス必須・写真では 422', async () => {
+  const bob = (await call('GET', '/api/users')).body.find((u) => u.name === 'Bob');
+  assert.equal((await call('POST', `/api/users/${bob.id}/samples`, { descriptors: [vec(0.52)] })).status, 400);
+
+  const photo = await call('POST', `/api/users/${bob.id}/samples`, {
+    descriptors: [vec(0.52)],
+    liveness: await liveEvidence(call, [vec(0.52)], { frames: staticFrames() }),
+  });
+  assert.equal(photo.status, 422);
+
+  const ok = await call('POST', `/api/users/${bob.id}/samples`, {
+    descriptors: [vec(0.52)],
+    liveness: await liveEvidence(call, [vec(0.52)]),
+  });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.samples, 3);
 });

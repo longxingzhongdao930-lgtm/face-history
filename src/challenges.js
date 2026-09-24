@@ -6,7 +6,7 @@ import { randomActions } from '../public/shared/liveness.js';
  * チャレンジは 1 回限り有効で、期限切れのものは破棄される。
  */
 export class ChallengeStore {
-  constructor({ ttlMs = 60_000, maxPending = 1000, now = () => Date.now() } = {}) {
+  constructor({ ttlMs = 120_000, maxPending = 1000, now = () => Date.now() } = {}) {
     this.ttlMs = ttlMs;
     this.maxPending = maxPending;
     this.now = now;

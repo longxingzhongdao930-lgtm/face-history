@@ -114,12 +114,21 @@ test('サンプル追加', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.samples, 5, 'maxSamples で古いものから切り捨てる');
   assert.equal((await call('POST', '/api/users/nope/samples', { descriptors: [vec(0.1)] })).status, 404);
+  const samples = await call('GET', '/api/history?type=samples');
+  assert.equal(samples.body.total, 1);
+  assert.equal(samples.body.items[0].liveness, 'skipped');
+});
+
+test('サンプル追加: 本人の顔と一致しない顔（未登録の他人）は 403', async () => {
+  const res = await call('POST', `/api/users/${alice.id}/samples`, { descriptors: [vec(0.9)] });
+  assert.equal(res.status, 403);
+  assert.equal((await call('GET', '/api/users')).body[0].samples, 5, '追加されていない');
 });
 
 test('永続化: 再読み込みしてもデータが残る', async () => {
   const reloaded = await new Store(dir).init();
   assert.equal(reloaded.listUsers().length, 1);
-  assert.equal(reloaded.listHistory().total, 3);
+  assert.equal(reloaded.listHistory().total, 4); // register + auth x2 + samples
 });
 
 test('ユーザー削除後は認証に失敗し、削除も履歴に残る', async () => {
@@ -133,7 +142,7 @@ test('ユーザー削除後は認証に失敗し、削除も履歴に残る', as
 
 test('履歴の全削除でスナップショットも消える', async () => {
   const res = await call('DELETE', '/api/history');
-  assert.equal(res.body.removed, 5);
+  assert.equal(res.body.removed, 6);
   assert.equal((await call('GET', '/api/history')).body.total, 0);
   assert.deepEqual(await fs.readdir(path.join(dir, 'snapshots')), []);
 });
