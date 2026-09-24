@@ -29,6 +29,8 @@ const els = {
   registerName: $('#register-name'),
   registerCamera: $('#register-camera'),
   registerFile: $('#register-file'),
+  registerFileLabel: $('#register-file-label'),
+  registerHint: $('#register-hint'),
   registerResult: $('#register-result'),
   historyType: $('#history-type'),
   historyResult: $('#history-result'),
@@ -289,11 +291,15 @@ function hidePrompt() {
 }
 
 /**
- * ライブネス検知付きの認証。
- * サーバーから受け取ったランダムな動作を指示し、ランドマークの推移を記録して送る。
- * サーバーは同じ判定ロジックで記録を再検証する。
+ * ライブネス検知のチャレンジを実行する（認証・登録・サンプル追加で共通）。
+ * サーバーから受け取ったランダムな動作を指示し、ランドマークの推移を記録する。
+ * 動作の完了後（または時間切れ）、顔が正面に戻るのを待って `capture()` で最終撮影する。
+ * 時間切れでも記録は返し、サーバー側で失敗（なりすまし疑い）として履歴に残す。
+ * @template T
+ * @param {(prompt: (text: string) => void) => Promise<T>} capture
+ * @returns {Promise<{ result: T, evidence: { challengeId: string, frames: object[], checkpoints: number[][] } }>}
  */
-async function authenticateWithLiveness() {
+async function runLivenessChallenge(capture) {
   const video = els.video;
   const challenge = await api('/liveness/challenge', { method: 'POST' });
   const actions = challenge.actions.map((a) => a.id);
@@ -305,13 +311,12 @@ async function authenticateWithLiveness() {
   try {
     showPrompt('準備', 'カメラの正面を向いてください', timeout);
     await nextPaint();
-    // 開始時点の顔（最終的に照合する顔と同一人物かをサーバーで確認する）
+    // 開始時点の顔（最終的に使う顔と同一人物かをサーバーで確認する）
     checkpoints.push((await extractFace(video)).descriptor);
 
     const start = performance.now();
     while (!tracker.done) {
       const elapsed = performance.now() - start;
-      // 時間切れでも記録はサーバーへ送り、失敗（なりすまし疑い）として履歴に残す
       if (elapsed > timeout || frames.length >= LIVENESS.maxFrames) break;
       const step = tracker.calibrating ? '準備' : `${tracker.index + 1} / ${actions.length}`;
       const text = tracker.calibrating ? 'カメラの正面を向いてください' : ACTIONS[tracker.current];
@@ -326,7 +331,7 @@ async function authenticateWithLiveness() {
         frames.push({ t: Math.round(frameStart - start), points });
         const completed = tracker.push(points, frames.length - 1);
         if (completed) {
-          // 動作直後の顔も記録（横向き等で取れない場合は開始時・最終の顔で判定）。
+          // 動作直後の顔も記録（横向き等で取れない場合は開始時の顔で判定）。
           // 遅い端末でも止まらないよう軽量な検出器を使う
           try {
             checkpoints.push((await extractFace(video, liveOptions())).descriptor);
@@ -339,19 +344,46 @@ async function authenticateWithLiveness() {
       await nextPaint(LIVENESS_FRAME_MS - (performance.now() - frameStart));
     }
 
-    showPrompt('照合', '正面を向いたまま静止してください', 0);
+    const prompt = (text) => showPrompt('撮影', text, 0);
+    prompt('正面を向いたまま静止してください');
     await nextPaint();
-    // 照合精度を上げるため、顔が正面に戻るまで待ってから撮影する
+    // 精度を上げるため、顔が正面に戻るまで待ってから撮影する
     if (tracker.done) await waitForFrontal(video, 5000);
-    const face = await extractFace(video);
-    const snapshot = makeSnapshot(video, face.box);
-    return await api('/auth', {
-      method: 'POST',
-      body: { descriptor: face.descriptor, snapshot, liveness: { challengeId: challenge.id, frames, checkpoints } },
-    });
+    const result = await capture(prompt);
+    return { result, evidence: { challengeId: challenge.id, frames, checkpoints } };
   } finally {
     hidePrompt();
   }
+}
+
+async function authenticateWithLiveness() {
+  const video = els.video;
+  const { result: face, evidence } = await runLivenessChallenge(async () => {
+    const f = await extractFace(video);
+    return { ...f, snapshot: makeSnapshot(video, f.box) };
+  });
+  return api('/auth', {
+    method: 'POST',
+    body: { descriptor: face.descriptor, snapshot: face.snapshot, liveness: evidence },
+  });
+}
+
+/**
+ * 登録・サンプル追加用に顔を複数枚撮影する。
+ * ライブネス検知が有効なら、先にチャレンジを実行してその証跡も返す。
+ * @returns {Promise<{ descriptors: number[][], liveness?: object }>}
+ */
+async function captureForRegistration(onProgress) {
+  if (!state.config.liveness) {
+    return { descriptors: await captureSamples(REGISTER_SAMPLES, onProgress) };
+  }
+  const { result, evidence } = await runLivenessChallenge((prompt) =>
+    captureSamples(REGISTER_SAMPLES, (i, n) => {
+      prompt(`正面を向いたまま静止してください（撮影 ${i} / ${n}）`);
+      onProgress?.(i, n);
+    }),
+  );
+  return { descriptors: result, liveness: evidence };
 }
 
 async function waitForFrontal(video, maxWaitMs) {
@@ -423,8 +455,8 @@ async function captureSamples(count, onProgress) {
   return descriptors;
 }
 
-async function submitRegistration(name, descriptors) {
-  const user = await api('/users', { method: 'POST', body: { name, descriptors } });
+async function submitRegistration(name, descriptors, liveness) {
+  const user = await api('/users', { method: 'POST', body: { name, descriptors, liveness } });
   showResult(els.registerResult, 'success', `「${user.name}」を登録しました`, `サンプル数 ${user.samples}`);
   els.registerName.value = '';
   refreshUsers();
@@ -434,10 +466,11 @@ async function submitRegistration(name, descriptors) {
 els.registerCamera.addEventListener('click', () => withBusy(async () => {
   try {
     const name = registerName();
-    const descriptors = await captureSamples(REGISTER_SAMPLES, (i, n) => {
-      showResult(els.registerResult, 'info', `撮影中… ${i} / ${n}`, '顔の角度を少しずつ変えてください');
+    showResult(els.registerResult, 'info', '撮影中…', 'カメラ映像の指示に従ってください');
+    const { descriptors, liveness } = await captureForRegistration((i, n) => {
+      showResult(els.registerResult, 'info', `撮影中… ${i} / ${n}`, state.config.liveness ? '' : '顔の角度を少しずつ変えてください');
     });
-    await submitRegistration(name, descriptors);
+    await submitRegistration(name, descriptors, liveness);
   } catch (err) {
     showResult(els.registerResult, 'failure', err.message);
   }
@@ -508,11 +541,15 @@ els.userList.addEventListener('click', (e) => {
   } else if (action === 'add-samples') {
     withBusy(async () => {
       try {
-        toast('撮影中…カメラを見てください');
-        const descriptors = await captureSamples(REGISTER_SAMPLES);
-        const user = await api(`/users/${encodeURIComponent(id)}/samples`, { method: 'POST', body: { descriptors } });
+        toast(state.config.liveness ? 'カメラ映像の指示に従ってください' : '撮影中…カメラを見てください');
+        const { descriptors, liveness } = await captureForRegistration();
+        const user = await api(`/users/${encodeURIComponent(id)}/samples`, {
+          method: 'POST',
+          body: { descriptors, liveness },
+        });
         toast(`「${user.name}」のサンプルを追加しました（計 ${user.samples} 件）`);
         refreshUsers();
+        refreshHistory();
       } catch (err) {
         toast(err.message);
       }
@@ -522,7 +559,7 @@ els.userList.addEventListener('click', (e) => {
 
 // ---------------------------------------------------------------- history
 
-const TYPE_LABEL = { auth: '認証', register: '登録', delete: '削除' };
+const TYPE_LABEL = { auth: '認証', register: '登録', samples: 'サンプル追加', delete: '削除' };
 
 function historyItem(h) {
   const thumb = h.hasSnapshot
@@ -537,6 +574,10 @@ function historyItem(h) {
   } else if (h.type === 'auth') {
     title = h.result === 'success' ? h.userName : '不明な人物';
     badge = el('span', { className: `badge ${h.result}`, textContent: h.result === 'success' ? '認証成功' : '認証失敗' });
+  } else if (h.reason === 'liveness') {
+    // 登録・サンプル追加がライブネス検知で拒否された
+    title = `${h.userName}（${TYPE_LABEL[h.type]}・なりすまし疑い）`;
+    badge = el('span', { className: 'badge failure', textContent: 'ライブネス失敗' });
   } else {
     title = h.userName;
     badge = el('span', { className: 'badge neutral', textContent: TYPE_LABEL[h.type] ?? h.type });
@@ -621,6 +662,10 @@ async function loadConfig() {
   }
   // ライブネス検知が有効なときは、写真での認証（なりすましと区別できない）を無効にする
   els.authFileLabel.hidden = state.config.liveness;
+  els.registerFileLabel.hidden = state.config.liveness;
+  els.registerHint.textContent = state.config.liveness
+    ? `名前を入力して「撮影して登録」を押し、画面の指示（まばたき・顔の向き・口を開ける）に従ってください。最後に正面を向いたまま ${REGISTER_SAMPLES} 枚撮影します。`
+    : `名前を入力し、カメラで ${REGISTER_SAMPLES} 枚撮影して登録します（撮影中は少しずつ顔の角度を変えると精度が上がります）。`;
   els.authHint.textContent = state.config.liveness
     ? 'カメラに顔を正面から映して「認証する」を押し、画面の指示（まばたき・顔の向き・口を開ける）に従ってください。'
     : 'カメラに顔を正面から映して「認証する」を押してください。';

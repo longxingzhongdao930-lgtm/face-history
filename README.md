@@ -16,10 +16,10 @@ npm start
 ```
 
 1. 「カメラを起動」を押してカメラを許可します。
-2. **登録**タブ: 名前を入力して「撮影して登録」（3 枚自動撮影）。顔写真ファイルからも登録できます。
+2. **登録**タブ: 名前を入力して「撮影して登録」を押し、画面の指示に従います（ライブネス検知の後、正面を向いたまま 3 枚自動撮影）。
 3. **認証**タブ: 「認証する」を押し、カメラ映像に表示される指示（例:「顔をゆっくり左に向けてください」→「ゆっくりまばたきしてください」）に従います。最後に正面を向くと照合され、結果は自動で履歴に保存されます。
 4. **履歴**タブ: 認証の成功／失敗、登録・削除の記録を新しい順に表示します。認証時の顔のサムネイルも残ります。ライブネス検知に失敗した試行は「なりすまし疑い」として、提示された顔の人物名とともに記録されます。
-5. **ユーザー**タブ: サンプル追加（精度向上）とユーザー削除ができます。
+5. **ユーザー**タブ: サンプル追加（精度向上）とユーザー削除ができます。サンプル追加もライブネス検知が必要で、そのユーザー本人の顔（登録済みの顔と一致するもの）しか追加できません。
 
 > カメラはセキュアコンテキスト（`localhost` または HTTPS）でのみ使えます。スマートフォンから使う場合は HTTPS のリバースプロキシ等を用意してください。
 
@@ -31,7 +31,7 @@ npm start
 | `HOST` | `127.0.0.1` | 待ち受けアドレス。LAN に公開する場合は `0.0.0.0` |
 | `DATA_DIR` | `./data` | 保存先ディレクトリ |
 | `FACE_THRESHOLD` | `0.5` | 照合のしきい値（ユークリッド距離）。小さいほど厳格。推奨 0.4〜0.6 |
-| `LIVENESS` | `on` | ライブネス検知。`off` で無効（画像ファイルでの認証が可能になる） |
+| `LIVENESS` | `on` | ライブネス検知（認証・登録・サンプル追加）。`off` で無効（画像ファイルでの認証・登録が可能になる） |
 
 ## 仕組み
 
@@ -43,7 +43,7 @@ npm start
 
 ```
 ブラウザ                                   サーバー
-  │  POST /api/liveness/challenge  ──────▶  ランダムな動作を 2 つ発行（1 回限り・60 秒有効）
+  │  POST /api/liveness/challenge  ──────▶  ランダムな動作を 2 つ発行（1 回限り・120 秒有効）
   │  ◀──────  例: [turn_left, blink]
   │  指示を表示し、68 点ランドマークを毎フレーム記録
   │  正面に戻ったら照合用の顔を撮影
@@ -57,7 +57,8 @@ npm start
 - 各動作は **ニュートラル（目を開ける・正面・口を閉じる）→ 動作** の遷移で判定するため、最初から横を向いた写真や口を開けた写真では通りません。
 - 判定ロジックは `public/shared/liveness.js` にあり、ブラウザ（指示の表示）とサーバー（検証）で同じコードを使います。
 - 指標: 目の開き（EAR）、口の開き（MAR）、顔の左右の向き（鼻先から左右の顎端までの距離比）。しきい値は同ファイルの `LIVENESS` で調整できます。
-- ライブネス検知が有効な間は、写真と区別できないため「画像で認証」は表示されません（登録は画像からも可能です）。
+- ライブネス検知は **認証・登録・サンプル追加** のすべてに適用されます。有効な間は写真と区別できないため「画像で認証」「画像から登録」は表示されません。
+- 登録・サンプル追加では、動作中の顔と撮影した全サンプルが同一人物かも確認します。失敗した試行は「なりすまし疑い」として履歴に残ります。
 
 ### データ保存
 
@@ -76,11 +77,11 @@ data/
 | `GET` | `/api/config` | しきい値・ライブネス検知の有効/無効など |
 | `POST` | `/api/liveness/challenge` | ライブネス検知のチャレンジ発行 |
 | `GET` | `/api/users` | ユーザー一覧（特徴量は返さない） |
-| `POST` | `/api/users` | 顔登録 `{ name, descriptors: number[128][] }` |
-| `POST` | `/api/users/:id/samples` | サンプル追加 `{ descriptors }` |
+| `POST` | `/api/users` | 顔登録 `{ name, descriptors: number[128][], liveness? }`（ライブネス失敗時は 422） |
+| `POST` | `/api/users/:id/samples` | サンプル追加 `{ descriptors, liveness? }`（本人の顔と一致しない場合は 403） |
 | `DELETE` | `/api/users/:id` | ユーザー削除 |
-| `POST` | `/api/auth` | 顔認証 `{ descriptor: number[128], snapshot?: "data:image/jpeg;base64,...", liveness?: { challengeId, frames: { t, points: number[68][2] }[], checkpoints: number[128][] } }`（`liveness` は検知有効時に必須） |
-| `GET` | `/api/history` | 履歴 `?limit&offset&type=auth\|register\|delete&result=success\|failure&userId` |
+| `POST` | `/api/auth` | 顔認証 `{ descriptor: number[128], snapshot?: "data:image/jpeg;base64,...", liveness?: { challengeId, frames: { t, points: number[68][2] }[], checkpoints: number[128][] } }`（`liveness` は検知有効時に必須。登録・サンプル追加も同じ形式） |
+| `GET` | `/api/history` | 履歴 `?limit&offset&type=auth\|register\|samples\|delete&result=success\|failure&userId` |
 | `GET` | `/api/history/:id/snapshot` | 認証時のサムネイル |
 | `DELETE` | `/api/history` | 履歴を全削除 |
 

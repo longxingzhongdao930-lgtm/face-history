@@ -42,3 +42,17 @@ export function framesFor(actions, { start = 0, step = 100 } = {}) {
 }
 
 export const vec = (v) => Array(128).fill(v);
+
+/** チャレンジを発行し、指示どおりに動いた証跡を作る（API テスト用） */
+export async function liveEvidence(call, checkpoints, { frames } = {}) {
+  const res = await call('POST', '/api/liveness/challenge');
+  const actions = res.body.actions.map((a) => a.id);
+  return {
+    challengeId: res.body.id,
+    frames: frames ?? framesFor(actions),
+    checkpoints,
+  };
+}
+
+/** 動きのない（写真のような）フレーム列 */
+export const staticFrames = (n = 20) => Array.from({ length: n }, (_, i) => ({ t: i * 100, points: face() }));

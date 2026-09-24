@@ -58,7 +58,7 @@ function parseSnapshot(value) {
  * ライブネスの証跡を検証する。
  * @returns {string|null} 失敗理由（成功なら null）
  */
-function checkLiveness(challenge, evidence, descriptor, { consistency, now }) {
+function checkLiveness(challenge, evidence, descriptors, { consistency, now }) {
   const { frames, checkpoints } = evidence;
   const result = verifyFrames(challenge.actions, frames);
   if (!result.ok) return result.reason;
@@ -76,7 +76,7 @@ function checkLiveness(challenge, evidence, descriptor, { consistency, now }) {
   ) {
     return '動作中の顔データが不正です';
   }
-  if (checkpoints.some((c) => euclideanDistance(c, descriptor) > consistency)) {
+  if (checkpoints.some((c) => descriptors.some((d) => euclideanDistance(c, d) > consistency))) {
     return '動作中に別の顔が検出されました';
   }
   return null;
@@ -114,6 +114,34 @@ export function createApp(
   // ---- api ----
   const api = express.Router();
 
+  /**
+   * リクエストのライブネス証跡を検証する。
+   * 証跡の欠落・無効なチャレンジは 400（リクエスト不正）、動作の不一致などは結果として返す。
+   * @param {number[][]} descriptors この操作で使う顔（認証なら 1 件、登録なら撮影した全サンプル）
+   * @returns {{ status: 'skipped' | 'passed' | 'failed', reason: string | null }}
+   */
+  function verifyLiveness(evidence, descriptors) {
+    if (!liveness) return { status: 'skipped', reason: null };
+    if (!evidence || typeof evidence !== 'object') {
+      throw new HttpError(400, 'ライブネス検知の結果（liveness）が必要です');
+    }
+    const challenge = challenges.consume(evidence.challengeId);
+    if (!challenge) {
+      throw new HttpError(400, 'チャレンジが無効か期限切れです。もう一度やり直してください');
+    }
+    const reason = checkLiveness(challenge, evidence, descriptors, {
+      consistency: livenessConsistency,
+      now: Date.now(),
+    });
+    return { status: reason ? 'failed' : 'passed', reason };
+  }
+
+  class LivenessError extends HttpError {
+    constructor(reason) {
+      super(422, `ライブネス検知に失敗しました: ${reason}`, { reason: 'liveness', detail: reason });
+    }
+  }
+
   api.get('/config', (req, res) => {
     res.json({ threshold, maxSamples, liveness, challengeTtlMs: challenges.ttlMs });
   });
@@ -145,6 +173,22 @@ export function createApp(
     if (store.findUserByName(name)) {
       throw new HttpError(409, `「${name}」は既に登録されています`);
     }
+
+    // 写真・画面による他人の顔の登録を防ぐ
+    const live = verifyLiveness(req.body.liveness, descriptors);
+    if (live.status === 'failed') {
+      await store.addHistory({
+        type: 'register',
+        result: 'failure',
+        userId: null,
+        userName: name,
+        liveness: 'failed',
+        reason: 'liveness',
+        detail: live.reason,
+      });
+      throw new LivenessError(live.reason);
+    }
+
     // 同一人物の二重登録を防ぐ
     for (const d of descriptors) {
       const match = findBestMatch(d, store.listUsers(), threshold);
@@ -156,7 +200,13 @@ export function createApp(
     }
 
     const user = await store.addUser({ name, descriptors });
-    await store.addHistory({ type: 'register', result: 'success', userId: user.id, userName: user.name });
+    await store.addHistory({
+      type: 'register',
+      result: 'success',
+      userId: user.id,
+      userName: user.name,
+      liveness: live.status,
+    });
     res.status(201).json(publicUser(user));
   });
 
@@ -170,8 +220,34 @@ export function createApp(
       if (match.matched && match.user.id !== user.id) {
         throw new HttpError(409, `この顔は「${match.user.name}」として登録されています`);
       }
+      // 他人の顔を追加されると、その人がこのユーザーとして認証できてしまう
+      if (!findBestMatch(d, [user], threshold).matched) {
+        throw new HttpError(403, `「${user.name}」の登録済みの顔と一致しないため追加できません`);
+      }
     }
+
+    const live = verifyLiveness(req.body.liveness, descriptors);
+    if (live.status === 'failed') {
+      await store.addHistory({
+        type: 'samples',
+        result: 'failure',
+        userId: user.id,
+        userName: user.name,
+        liveness: 'failed',
+        reason: 'liveness',
+        detail: live.reason,
+      });
+      throw new LivenessError(live.reason);
+    }
+
     const updated = await store.addSamples(user.id, descriptors, maxSamples);
+    await store.addHistory({
+      type: 'samples',
+      result: 'success',
+      userId: user.id,
+      userName: user.name,
+      liveness: live.status,
+    });
     res.json(publicUser(updated));
   });
 
@@ -191,23 +267,9 @@ export function createApp(
     }
     const snapshot = parseSnapshot(req.body.snapshot);
 
-    let livenessStatus = 'skipped';
-    let livenessReason = null;
-    if (liveness) {
-      const evidence = req.body.liveness;
-      if (!evidence || typeof evidence !== 'object') {
-        throw new HttpError(400, 'ライブネス検知の結果（liveness）が必要です');
-      }
-      const challenge = challenges.consume(evidence.challengeId);
-      if (!challenge) {
-        throw new HttpError(400, 'チャレンジが無効か期限切れです。もう一度やり直してください');
-      }
-      livenessReason = checkLiveness(challenge, evidence, descriptor, {
-        consistency: livenessConsistency,
-        now: Date.now(),
-      });
-      livenessStatus = livenessReason ? 'failed' : 'passed';
-    }
+    const live = verifyLiveness(req.body.liveness, [descriptor]);
+    const livenessStatus = live.status;
+    const livenessReason = live.reason;
 
     const match = findBestMatch(descriptor, store.listUsers(), threshold);
     const distance = match.distance == null ? null : Number(match.distance.toFixed(4));
@@ -251,7 +313,7 @@ export function createApp(
       offset: parseLimit(req.query.offset, 0, Number.MAX_SAFE_INTEGER),
       userId: typeof userId === 'string' ? userId : undefined,
       result: result === 'success' || result === 'failure' ? result : undefined,
-      type: ['auth', 'register', 'delete'].includes(type) ? type : undefined,
+      type: ['auth', 'register', 'samples', 'delete'].includes(type) ? type : undefined,
     });
     res.json(page);
   });
