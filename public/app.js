@@ -40,6 +40,10 @@ const els = {
   historyMore: $('#history-more'),
   userList: $('#user-list'),
   toast: $('#toast'),
+  adminButton: $('#admin-button'),
+  loginPanel: $('#panel-login'),
+  adminPassword: $('#admin-password'),
+  loginResult: $('#login-result'),
 };
 
 const state = {
@@ -49,7 +53,14 @@ const state = {
   busy: false,
   historyOffset: 0,
   config: { liveness: false },
+  // enabled: 管理者パスワードが設定されているか / loggedIn: ログイン済みか
+  admin: { enabled: false, loggedIn: true },
+  tab: 'auth',
 };
+
+/** 管理操作（登録・履歴・ユーザー管理）が可能か */
+const canAdmin = () => !state.admin.enabled || state.admin.loggedIn;
+const ADMIN_TABS = new Set(['register', 'history', 'users']);
 
 // ---------------------------------------------------------------- utilities
 
@@ -61,6 +72,12 @@ async function api(path, options = {}) {
   });
   if (res.status === 204) return null;
   const data = await res.json().catch(() => ({}));
+  if (res.status === 401 && data.code === 'admin_required') {
+    // セッション切れ（サーバー再起動・期限切れ）
+    state.admin.loggedIn = false;
+    updateAdminUI();
+    if (ADMIN_TABS.has(state.tab)) showTab(state.tab);
+  }
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data;
 }
@@ -500,6 +517,7 @@ els.registerFile.addEventListener('change', () => withBusy(async () => {
 // ---------------------------------------------------------------- users
 
 async function refreshUsers() {
+  if (!canAdmin()) return;
   let users;
   try {
     users = await api('/users');
@@ -598,6 +616,7 @@ function historyItem(h) {
 }
 
 async function refreshHistory({ append = false } = {}) {
+  if (!canAdmin()) return;
   const offset = append ? state.historyOffset : 0;
   const params = new URLSearchParams({ limit: HISTORY_PAGE, offset });
   if (els.historyType.value) params.set('type', els.historyType.value);
@@ -636,20 +655,75 @@ els.historyClear.addEventListener('click', async () => {
 
 // ---------------------------------------------------------------- tabs & init
 
-document.querySelectorAll('.tab').forEach((tab) => {
-  tab.addEventListener('click', () => {
-    const name = tab.dataset.tab;
-    document.querySelectorAll('.tab').forEach((t) => {
-      const active = t === tab;
-      t.classList.toggle('active', active);
-      t.setAttribute('aria-selected', String(active));
-    });
-    document.querySelectorAll('.tab-panel').forEach((p) => {
-      p.hidden = p.id !== `panel-${name}`;
-    });
-    if (name === 'history') refreshHistory();
-    if (name === 'users') refreshUsers();
+/** タブを表示する。管理用タブは未ログインならログイン画面を代わりに表示する */
+function showTab(name) {
+  state.tab = name;
+  document.querySelectorAll('.tab').forEach((t) => {
+    const active = t.dataset.tab === name;
+    t.classList.toggle('active', active);
+    t.setAttribute('aria-selected', String(active));
   });
+  const locked = ADMIN_TABS.has(name) && !canAdmin();
+  document.querySelectorAll('.tab-panel').forEach((p) => {
+    p.hidden = locked ? p !== els.loginPanel : p.id !== `panel-${name}`;
+  });
+  if (locked) {
+    els.adminPassword.focus();
+    return;
+  }
+  if (name === 'history') refreshHistory();
+  if (name === 'users') refreshUsers();
+}
+
+document.querySelectorAll('.tab').forEach((tab) => {
+  tab.addEventListener('click', () => showTab(tab.dataset.tab));
+});
+
+function updateAdminUI() {
+  els.adminButton.hidden = !state.admin.enabled;
+  els.adminButton.textContent = state.admin.loggedIn ? 'ログアウト' : '管理者ログイン';
+}
+
+async function loadAdminStatus() {
+  try {
+    state.admin = await api('/admin/status');
+  } catch (err) {
+    toast(`ログイン状態を取得できません: ${err.message}`);
+  }
+  updateAdminUI();
+}
+
+els.loginPanel.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  try {
+    await api('/admin/login', { method: 'POST', body: { password: els.adminPassword.value } });
+    els.adminPassword.value = '';
+    els.loginResult.hidden = true;
+    state.admin.loggedIn = true;
+    updateAdminUI();
+    showTab(ADMIN_TABS.has(state.tab) ? state.tab : 'register');
+    toast('管理者としてログインしました');
+  } catch (err) {
+    showResult(els.loginResult, 'failure', err.message);
+  }
+});
+
+els.adminButton.addEventListener('click', async () => {
+  if (!state.admin.loggedIn) {
+    showTab(ADMIN_TABS.has(state.tab) ? state.tab : 'register');
+    return;
+  }
+  try {
+    await api('/admin/logout', { method: 'POST' });
+  } catch (err) {
+    toast(err.message);
+  }
+  state.admin.loggedIn = false;
+  updateAdminUI();
+  els.historyList.replaceChildren();
+  els.userList.replaceChildren();
+  showTab('auth');
+  toast('ログアウトしました');
 });
 
 els.cameraToggle.addEventListener('click', () => (state.stream ? stopCamera() : startCamera()));
@@ -673,5 +747,5 @@ async function loadConfig() {
 
 updateButtons();
 loadConfig();
-refreshUsers();
+loadAdminStatus().then(() => refreshUsers());
 loadModels();

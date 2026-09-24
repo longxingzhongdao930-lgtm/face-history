@@ -21,7 +21,36 @@ npm start
 4. **履歴**タブ: 認証の成功／失敗、登録・削除の記録を新しい順に表示します。認証時の顔のサムネイルも残ります。ライブネス検知に失敗した試行は「なりすまし疑い」として、提示された顔の人物名とともに記録されます。
 5. **ユーザー**タブ: サンプル追加（精度向上）とユーザー削除ができます。サンプル追加もライブネス検知が必要で、そのユーザー本人の顔（登録済みの顔と一致するもの）しか追加できません。
 
-> カメラはセキュアコンテキスト（`localhost` または HTTPS）でのみ使えます。スマートフォンから使う場合は HTTPS のリバースプロキシ等を用意してください。
+> カメラはセキュアコンテキスト（`localhost` または HTTPS）でのみ使えます。スマートフォンから使う場合は下記「スマートフォンから使う（HTTPS）」を参照してください。
+
+### 管理者ログイン
+
+`ADMIN_PASSWORD` を設定すると、**登録・履歴・ユーザー管理** の各タブと対応する API が管理者専用になります。**顔認証** は誰でも利用できます（受付端末などでの利用を想定）。
+
+```bash
+ADMIN_PASSWORD='十分に長いパスワード' npm start
+```
+
+- 右上の「管理者ログイン」、または管理用タブを開くとパスワード入力画面が表示されます。
+- セッションは 8 時間有効（HttpOnly / SameSite=Strict の Cookie）。サーバーを再起動するとログアウトされます。
+- ログインに 5 回失敗すると、その IP からは 15 分間ログインできません。
+- `HOST` を `127.0.0.1` 以外（LAN やインターネットに公開）にする場合、`ADMIN_PASSWORD` は **必須** です（未設定だと起動しません）。
+
+### スマートフォンから使う（HTTPS）
+
+スマートフォンのブラウザでカメラを使うには HTTPS が必要です。証明書を用意して `TLS_CERT` / `TLS_KEY` を指定すると、HTTPS で起動します。
+
+```bash
+# 例: mkcert でローカル用の証明書を作成（https://github.com/FiloSottile/mkcert）
+mkcert -install
+mkcert 192.168.1.10 localhost        # PC の LAN 内 IP アドレス
+
+HOST=0.0.0.0 ADMIN_PASSWORD='十分に長いパスワード' \
+TLS_CERT=./192.168.1.10+1.pem TLS_KEY=./192.168.1.10+1-key.pem npm start
+# → スマートフォンで https://192.168.1.10:3000 を開く
+```
+
+スマートフォン側で証明書を信頼するには、mkcert のルート証明書（`mkcert -CAROOT` の場所にある `rootCA.pem`）を端末にインストールしてください。nginx などのリバースプロキシで HTTPS 化する場合は、`TRUST_PROXY=1` を設定してください。
 
 ## 設定（環境変数）
 
@@ -31,6 +60,9 @@ npm start
 | `HOST` | `127.0.0.1` | 待ち受けアドレス。LAN に公開する場合は `0.0.0.0` |
 | `DATA_DIR` | `./data` | 保存先ディレクトリ |
 | `FACE_THRESHOLD` | `0.5` | 照合のしきい値（ユークリッド距離）。小さいほど厳格。推奨 0.4〜0.6 |
+| `ADMIN_PASSWORD` | （なし） | 管理者パスワード（8 文字以上）。設定すると登録・履歴・ユーザー管理がログイン必須になる |
+| `TLS_CERT` / `TLS_KEY` | （なし） | HTTPS で起動する場合の証明書・秘密鍵ファイルのパス |
+| `TRUST_PROXY` | （なし） | リバースプロキシ配下で動かす場合に設定（Express の `trust proxy`。例: `1`） |
 | `LIVENESS` | `on` | ライブネス検知（認証・登録・サンプル追加）。`off` で無効（画像ファイルでの認証・登録が可能になる） |
 
 ## 仕組み
@@ -72,23 +104,28 @@ data/
 
 ## API
 
+🔒 は `ADMIN_PASSWORD` 設定時に管理者ログインが必要な API です（未ログインは 401 `{ code: "admin_required" }`）。
+
 | メソッド | パス | 説明 |
 | --- | --- | --- |
+| `GET` | `/api/admin/status` | 管理者ログインの有効/無効とログイン状態 |
+| `POST` | `/api/admin/login` | 管理者ログイン `{ password }` |
+| `POST` | `/api/admin/logout` | ログアウト |
 | `GET` | `/api/config` | しきい値・ライブネス検知の有効/無効など |
 | `POST` | `/api/liveness/challenge` | ライブネス検知のチャレンジ発行 |
-| `GET` | `/api/users` | ユーザー一覧（特徴量は返さない） |
-| `POST` | `/api/users` | 顔登録 `{ name, descriptors: number[128][], liveness? }`（ライブネス失敗時は 422） |
-| `POST` | `/api/users/:id/samples` | サンプル追加 `{ descriptors, liveness? }`（本人の顔と一致しない場合は 403） |
-| `DELETE` | `/api/users/:id` | ユーザー削除 |
+| `GET` | `/api/users` 🔒 | ユーザー一覧（特徴量は返さない） |
+| `POST` | `/api/users` 🔒 | 顔登録 `{ name, descriptors: number[128][], liveness? }`（ライブネス失敗時は 422） |
+| `POST` | `/api/users/:id/samples` 🔒 | サンプル追加 `{ descriptors, liveness? }`（本人の顔と一致しない場合は 403） |
+| `DELETE` | `/api/users/:id` 🔒 | ユーザー削除 |
 | `POST` | `/api/auth` | 顔認証 `{ descriptor: number[128], snapshot?: "data:image/jpeg;base64,...", liveness?: { challengeId, frames: { t, points: number[68][2] }[], checkpoints: number[128][] } }`（`liveness` は検知有効時に必須。登録・サンプル追加も同じ形式） |
-| `GET` | `/api/history` | 履歴 `?limit&offset&type=auth\|register\|samples\|delete&result=success\|failure&userId` |
-| `GET` | `/api/history/:id/snapshot` | 認証時のサムネイル |
-| `DELETE` | `/api/history` | 履歴を全削除 |
+| `GET` | `/api/history` 🔒 | 履歴 `?limit&offset&type=auth\|register\|samples\|delete&result=success\|failure&userId` |
+| `GET` | `/api/history/:id/snapshot` 🔒 | 認証時のサムネイル |
+| `DELETE` | `/api/history` 🔒 | 履歴を全削除 |
 
 ## 注意事項
 
 - ライブネス検知はカメラ映像の動きに基づく簡易的なもので、認証を受けた PAD（なりすまし検知）製品ではありません。写真・静止画面・録画の再生は防げますが、精巧なマスクや、API を直接呼び出して偽のランドマークを送る攻撃は防げません。入退室管理など厳密な本人確認には単独で使わないでください。
-- 管理 API に認証はありません。既定では `127.0.0.1` でのみ待ち受けます。外部公開する場合はリバースプロキシ等でアクセス制限を追加してください。
+- 既定では `127.0.0.1` でのみ待ち受けます。外部に公開する場合は `ADMIN_PASSWORD` の設定（必須）に加え、HTTPS で運用してください（HTTP ではパスワードが平文で流れます）。
 
 ## テスト
 
