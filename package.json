@@ -1,0 +1,23 @@
+{
+  "name": "face-history",
+  "version": "1.0.0",
+  "description": "ブラウザで顔登録・顔認証を行い、認証履歴を保存する Web アプリ",
+  "type": "module",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test test/*.test.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/longxingzhongdao930-lgtm/face-history.git"
+  },
+  "license": "ISC",
+  "dependencies": {
+    "@vladmandic/face-api": "^1.7.15",
+    "express": "^5.2.1"
+  }
+}

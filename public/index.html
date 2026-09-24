@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Face History</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="app-header">
+    <h1>Face History</h1>
+    <span id="model-status" class="pill">モデル読み込み中…</span>
+  </header>
+
+  <main class="layout">
+    <section class="card camera-card" aria-label="カメラ">
+      <div class="camera">
+        <video id="video" autoplay muted playsinline></video>
+        <canvas id="overlay"></canvas>
+        <div id="camera-placeholder" class="camera-placeholder">カメラは停止中です</div>
+      </div>
+      <div class="camera-actions">
+        <button id="camera-toggle" class="btn" type="button">カメラを起動</button>
+        <span id="face-indicator" class="face-indicator">—</span>
+      </div>
+    </section>
+
+    <section class="card panel-card">
+      <nav class="tabs" role="tablist">
+        <button class="tab active" role="tab" data-tab="auth" aria-selected="true">認証</button>
+        <button class="tab" role="tab" data-tab="register" aria-selected="false">登録</button>
+        <button class="tab" role="tab" data-tab="history" aria-selected="false">履歴</button>
+        <button class="tab" role="tab" data-tab="users" aria-selected="false">ユーザー</button>
+      </nav>
+
+      <!-- 認証 -->
+      <div class="tab-panel active" id="panel-auth" role="tabpanel">
+        <p class="hint">カメラに顔を正面から映して「認証する」を押してください。</p>
+        <div class="row">
+          <button id="auth-camera" class="btn primary" type="button" disabled>認証する</button>
+          <label class="btn file-btn">画像で認証
+            <input id="auth-file" type="file" accept="image/*" hidden>
+          </label>
+        </div>
+        <div id="auth-result" class="result" hidden></div>
+      </div>
+
+      <!-- 登録 -->
+      <div class="tab-panel" id="panel-register" role="tabpanel" hidden>
+        <p class="hint">名前を入力し、カメラで 3 枚撮影して登録します（撮影中は少しずつ顔の角度を変えると精度が上がります）。</p>
+        <label class="field">
+          <span>名前</span>
+          <input id="register-name" type="text" maxlength="50" placeholder="例: 山田 太郎" autocomplete="off">
+        </label>
+        <div class="row">
+          <button id="register-camera" class="btn primary" type="button" disabled>撮影して登録</button>
+          <label class="btn file-btn">画像から登録
+            <input id="register-file" type="file" accept="image/*" multiple hidden>
+          </label>
+        </div>
+        <div id="register-result" class="result" hidden></div>
+      </div>
+
+      <!-- 履歴 -->
+      <div class="tab-panel" id="panel-history" role="tabpanel" hidden>
+        <div class="row between">
+          <div class="row">
+            <select id="history-type" aria-label="種別">
+              <option value="">すべての種別</option>
+              <option value="auth">認証</option>
+              <option value="register">登録</option>
+              <option value="delete">削除</option>
+            </select>
+            <select id="history-result" aria-label="結果">
+              <option value="">すべての結果</option>
+              <option value="success">成功</option>
+              <option value="failure">失敗</option>
+            </select>
+          </div>
+          <button id="history-clear" class="btn danger" type="button">履歴を全削除</button>
+        </div>
+        <p id="history-summary" class="hint"></p>
+        <ul id="history-list" class="list"></ul>
+        <button id="history-more" class="btn wide" type="button" hidden>さらに表示</button>
+      </div>
+
+      <!-- ユーザー -->
+      <div class="tab-panel" id="panel-users" role="tabpanel" hidden>
+        <p class="hint">「サンプル追加」はカメラで撮影した顔を既存ユーザーに追加し、認証精度を上げます。</p>
+        <ul id="user-list" class="list"></ul>
+      </div>
+    </section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
