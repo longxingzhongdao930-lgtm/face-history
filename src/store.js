@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { BACKUP_FORMAT, BACKUP_VERSION } from './backup.js';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -130,6 +131,71 @@ export class Store {
     return record?.hasSnapshot ? this.#snapshotPath(record.id) : null;
   }
 
+  // ---- backup / restore ----
+
+  /** 全データをバックアップ形式で書き出す（書き込み中の状態を読まないよう直列化） */
+  exportData({ includeSnapshots = true } = {}) {
+    return this.#exclusive(async () => {
+      const snapshots = {};
+      if (includeSnapshots) {
+        for (const h of this.db.history) {
+          if (!h.hasSnapshot) continue;
+          try {
+            snapshots[h.id] = (await fs.readFile(this.#snapshotPath(h.id))).toString('base64');
+          } catch (err) {
+            if (err.code !== 'ENOENT') throw err;
+          }
+        }
+      }
+      return {
+        format: BACKUP_FORMAT,
+        version: BACKUP_VERSION,
+        createdAt: new Date().toISOString(),
+        users: structuredClone(this.db.users),
+        history: this.db.history.map(({ hasSnapshot, ...h }) => h),
+        snapshots,
+      };
+    });
+  }
+
+  /**
+   * バックアップ（parseBackup で検証済み）から復元する。
+   *   replace: 現在のデータをすべて置き換える
+   *   merge:   現在のデータに無いユーザー・履歴だけを追加する（同じ id / 同じ名前のユーザーは追加しない）
+   */
+  restoreData({ users, history, snapshots }, { mode = 'replace' } = {}) {
+    return this.#mutate(async () => {
+      let addUsers = users;
+      let addHistory = history;
+      const skippedUsers = [];
+      if (mode === 'replace') {
+        await this.#removeSnapshots(this.db.history);
+        this.db = { users: [], history: [] };
+      } else {
+        const ids = new Set(this.db.users.map((u) => u.id));
+        const names = new Set(this.db.users.map((u) => u.name));
+        addUsers = users.filter((u) => {
+          const ok = !ids.has(u.id) && !names.has(u.name);
+          if (!ok) skippedUsers.push(u.name);
+          return ok;
+        });
+        const historyIds = new Set(this.db.history.map((h) => h.id));
+        addHistory = history.filter((h) => !historyIds.has(h.id));
+      }
+
+      for (const h of addHistory) {
+        if (h.hasSnapshot) await fs.writeFile(this.#snapshotPath(h.id), snapshots.get(h.id));
+      }
+      this.db.users.push(...addUsers);
+      this.db.history.push(...addHistory);
+      this.db.history.sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+      const overflow = this.db.history.length - this.maxHistory;
+      if (overflow > 0) await this.#removeSnapshots(this.db.history.splice(0, overflow));
+
+      return { users: addUsers.length, history: addHistory.length, skippedUsers };
+    });
+  }
+
   // ---- internals ----
 
   #snapshotPath(id) {
@@ -142,6 +208,13 @@ export class Store {
         .filter((r) => r.hasSnapshot)
         .map((r) => fs.rm(this.#snapshotPath(r.id), { force: true })),
     );
+  }
+
+  /** 書き込みと同じ列に並べて実行する（永続化はしない） */
+  #exclusive(fn) {
+    const run = this.queue.then(fn);
+    this.queue = run.catch(() => {});
+    return run;
   }
 
   #mutate(fn) {

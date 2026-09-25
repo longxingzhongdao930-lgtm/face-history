@@ -90,6 +90,8 @@
               <option value="register">登録</option>
               <option value="samples">サンプル追加</option>
               <option value="delete">削除</option>
+              <option value="backup">バックアップ</option>
+              <option value="restore">復元</option>
             </select>
             <select id="history-result" aria-label="結果">
               <option value="">すべての結果</option>
@@ -108,6 +110,28 @@
       <div class="tab-panel" id="panel-users" role="tabpanel" hidden>
         <p class="hint">「サンプル追加」はカメラで撮影した顔を既存ユーザーに追加し、認証精度を上げます。</p>
         <ul id="user-list" class="list"></ul>
+
+        <section class="subsection" aria-labelledby="backup-heading">
+          <h2 id="backup-heading">バックアップ</h2>
+          <p class="hint">顔データ・履歴を 1 つのファイルに保存します。生体情報を含むため、安全な場所に保管してください。</p>
+          <div class="row">
+            <a id="backup-download" class="btn" href="/api/backup" download>バックアップをダウンロード</a>
+            <label class="check"><input id="backup-snapshots" type="checkbox" checked> 認証時の顔画像を含める</label>
+          </div>
+
+          <h3>復元</h3>
+          <div class="row">
+            <select id="restore-mode" aria-label="復元方法">
+              <option value="replace">すべて置き換える</option>
+              <option value="merge">追加する（既存のデータは残す）</option>
+            </select>
+            <label class="btn file-btn">ファイルを選んで復元
+              <input id="restore-file" type="file" accept="application/json,.json" hidden>
+            </label>
+          </div>
+          <p class="hint">「すべて置き換える」前の状態は、サーバーの <code>data/backups/</code> に自動で保存されます。</p>
+          <div id="restore-result" class="result" hidden></div>
+        </section>
       </div>
     </section>
   </main>

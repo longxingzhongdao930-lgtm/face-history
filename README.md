@@ -36,6 +36,24 @@ ADMIN_PASSWORD='十分に長いパスワード' npm start
 - ログインに 5 回失敗すると、その IP からは 15 分間ログインできません。
 - `HOST` を `127.0.0.1` 以外（LAN やインターネットに公開）にする場合、`ADMIN_PASSWORD` は **必須** です（未設定だと起動しません）。
 
+### バックアップと復元
+
+顔データ（生体情報）と履歴を 1 つの JSON ファイルにまとめて保存・復元できます。**ファイルには顔データが含まれるため、安全な場所に保管してください。**
+
+- **ダウンロード**: ユーザータブの「バックアップをダウンロード」（認証時の顔画像を含めるか選べます）。取得したことは履歴に残ります。
+- **復元**: ユーザータブで方法を選んでファイルを指定します。
+  - **すべて置き換える**: 現在のデータをバックアップの内容で置き換えます。置き換える前の状態は `data/backups/pre-restore-<日時>.json` に自動保存されます。
+  - **追加する**: 現在のデータに無いユーザー・履歴だけを追加します（同じ id・同じ名前のユーザーは追加しません）。
+- **定期バックアップ**: `BACKUP_INTERVAL_HOURS=24` のように設定すると、サーバーが `data/backups/auto-<日時>.json` を定期的に書き出し、新しい `BACKUP_KEEP` 件（既定 7）を残します。
+- **コマンド**: `npm run backup` で `data/backups/manual-<日時>.json` を書き出します（サーバー稼働中でも可）。cron での定期実行にも使えます。
+
+```bash
+npm run backup                          # data/backups/manual-<日時>.json
+npm run backup -- --out ./backup.json   # 保存先を指定
+npm run backup -- --no-snapshots        # 顔画像を含めない（ファイルが小さくなる）
+npm run backup -- --keep 7              # manual-*.json を新しい 7 件だけ残す
+```
+
 ### スマートフォンから使う（HTTPS）
 
 スマートフォンのブラウザでカメラを使うには HTTPS が必要です。証明書を用意して `TLS_CERT` / `TLS_KEY` を指定すると、HTTPS で起動します。
@@ -63,6 +81,9 @@ TLS_CERT=./192.168.1.10+1.pem TLS_KEY=./192.168.1.10+1-key.pem npm start
 | `ADMIN_PASSWORD` | （なし） | 管理者パスワード（8 文字以上）。設定すると登録・履歴・ユーザー管理がログイン必須になる |
 | `TLS_CERT` / `TLS_KEY` | （なし） | HTTPS で起動する場合の証明書・秘密鍵ファイルのパス |
 | `TRUST_PROXY` | （なし） | リバースプロキシ配下で動かす場合に設定（Express の `trust proxy`。例: `1`） |
+| `BACKUP_INTERVAL_HOURS` | `0` | 定期バックアップの間隔（時間）。`0` で無効 |
+| `BACKUP_KEEP` | `7` | 定期バックアップを残す件数 |
+| `BACKUP_DIR` | `<DATA_DIR>/backups` | 自動・定期・コマンドでのバックアップの保存先 |
 | `LIVENESS` | `on` | ライブネス検知（認証・登録・サンプル追加）。`off` で無効（画像ファイルでの認証・登録が可能になる） |
 
 ## 仕組み
@@ -97,7 +118,8 @@ TLS_CERT=./192.168.1.10+1.pem TLS_KEY=./192.168.1.10+1-key.pem npm start
 ```
 data/
 ├── db.json          # ユーザー（名前・顔特徴量）と履歴
-└── snapshots/*.jpg  # 認証時の顔サムネイル（160px）
+├── snapshots/*.jpg  # 認証時の顔サムネイル（160px）
+└── backups/*.json   # 復元前の自動保存・定期バックアップ・コマンドでのバックアップ
 ```
 
 `data/` は生体情報を含むため `.gitignore` 済みです。バックアップや削除はこのディレクトリ単位で行ってください。
@@ -118,9 +140,11 @@ data/
 | `POST` | `/api/users/:id/samples` 🔒 | サンプル追加 `{ descriptors, liveness? }`（本人の顔と一致しない場合は 403） |
 | `DELETE` | `/api/users/:id` 🔒 | ユーザー削除 |
 | `POST` | `/api/auth` | 顔認証 `{ descriptor: number[128], snapshot?: "data:image/jpeg;base64,...", liveness?: { challengeId, frames: { t, points: number[68][2] }[], checkpoints: number[128][] } }`（`liveness` は検知有効時に必須。登録・サンプル追加も同じ形式） |
-| `GET` | `/api/history` 🔒 | 履歴 `?limit&offset&type=auth\|register\|samples\|delete&result=success\|failure&userId` |
+| `GET` | `/api/history` 🔒 | 履歴 `?limit&offset&type=auth\|register\|samples\|delete\|backup\|restore&result=success\|failure&userId` |
 | `GET` | `/api/history/:id/snapshot` 🔒 | 認証時のサムネイル |
 | `DELETE` | `/api/history` 🔒 | 履歴を全削除 |
+| `GET` | `/api/backup` 🔒 | バックアップのダウンロード `?snapshots=0` で顔画像なし |
+| `POST` | `/api/backup/restore` 🔒 | 復元 `?mode=replace\|merge`（本文はバックアップファイルの JSON、最大 200MB） |
 
 ## 注意事項
 
