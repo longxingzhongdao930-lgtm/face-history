@@ -53,6 +53,7 @@ body {
 }
 .app-header h1 { margin: 0; font-size: 1.25rem; }
 .header-actions { display: flex; align-items: center; gap: 8px; }
+.app-header h1, .pill, .btn { white-space: nowrap; }
 
 .pill {
   font-size: 0.8rem;
@@ -142,6 +143,7 @@ body {
 
 .camera-actions {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
