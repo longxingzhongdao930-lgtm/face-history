@@ -9,7 +9,10 @@
 <body>
   <header class="app-header">
     <h1>Face History</h1>
-    <span id="model-status" class="pill">モデル読み込み中…</span>
+    <div class="header-actions">
+      <span id="model-status" class="pill">モデル読み込み中…</span>
+      <button id="admin-button" class="btn small" type="button" hidden>管理者ログイン</button>
+    </div>
   </header>
 
   <main class="layout">
@@ -37,6 +40,17 @@
         <button class="tab" role="tab" data-tab="history" aria-selected="false">履歴</button>
         <button class="tab" role="tab" data-tab="users" aria-selected="false">ユーザー</button>
       </nav>
+
+      <!-- 管理者ログイン（登録・履歴・ユーザー管理に必要） -->
+      <form class="tab-panel" id="panel-login" hidden>
+        <p class="hint">この画面は管理者のみ利用できます。管理者パスワードを入力してください。</p>
+        <label class="field">
+          <span>管理者パスワード</span>
+          <input id="admin-password" type="password" autocomplete="current-password" required>
+        </label>
+        <button id="admin-login" class="btn primary" type="submit">ログイン</button>
+        <div id="login-result" class="result" hidden></div>
+      </form>
 
       <!-- 認証 -->
       <div class="tab-panel active" id="panel-auth" role="tabpanel">

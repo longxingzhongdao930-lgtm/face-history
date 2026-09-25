@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACTIONS, verifyFrames } from '../public/shared/liveness.js';
+import { AdminAuth } from './admin.js';
 import { ChallengeStore } from './challenges.js';
 import { euclideanDistance, findBestMatch, isValidDescriptor } from './matcher.js';
 
@@ -100,10 +101,14 @@ export function createApp(
     liveness = true,
     livenessConsistency = 0.6,
     challenges = new ChallengeStore(),
+    admin = new AdminAuth(),
+    trustProxy = false,
   } = {},
 ) {
   const app = express();
   app.disable('x-powered-by');
+  // リバースプロキシ配下では、ログイン失敗の IP 判定と Secure Cookie のために必要
+  app.set('trust proxy', trustProxy);
   app.use(express.json({ limit: '2mb' }));
 
   // ---- static ----
@@ -142,6 +147,29 @@ export function createApp(
     }
   }
 
+  // 登録・削除・履歴など管理操作の保護（顔認証そのものは誰でも実行できる）
+  const requireAdmin = (req, res, next) => {
+    if (admin.isLoggedIn(req)) return next();
+    res.status(401).json({ error: '管理者ログインが必要です', code: 'admin_required' });
+  };
+
+  api.get('/admin/status', (req, res) => {
+    res.json({ enabled: admin.enabled, loggedIn: admin.isLoggedIn(req) });
+  });
+
+  api.post('/admin/login', (req, res) => {
+    if (!admin.enabled) throw new HttpError(404, '管理者パスワードが設定されていません');
+    const result = admin.login(req, res, req.body?.password);
+    if (result.ok) return res.status(204).end();
+    if (result.locked) throw new HttpError(429, 'ログインの失敗が続いたため、しばらくしてから再度お試しください');
+    throw new HttpError(401, 'パスワードが違います');
+  });
+
+  api.post('/admin/logout', (req, res) => {
+    admin.logout(req, res);
+    res.status(204).end();
+  });
+
   api.get('/config', (req, res) => {
     res.json({ threshold, maxSamples, liveness, challengeTtlMs: challenges.ttlMs });
   });
@@ -158,12 +186,12 @@ export function createApp(
     });
   });
 
-  api.get('/users', (req, res) => {
+  api.get('/users', requireAdmin, (req, res) => {
     res.json(store.listUsers().map(publicUser));
   });
 
   // 顔登録
-  api.post('/users', async (req, res) => {
+  api.post('/users', requireAdmin, async (req, res) => {
     const name = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
     if (!name || name.length > MAX_NAME_LENGTH) {
       throw new HttpError(400, `名前は 1〜${MAX_NAME_LENGTH} 文字で入力してください`);
@@ -211,7 +239,7 @@ export function createApp(
   });
 
   // 既存ユーザーへのサンプル追加（認証精度の向上用）
-  api.post('/users/:id/samples', async (req, res) => {
+  api.post('/users/:id/samples', requireAdmin, async (req, res) => {
     const descriptors = parseDescriptors(req.body?.descriptors, maxSamples);
     const user = store.getUser(req.params.id);
     if (!user) throw new HttpError(404, 'ユーザーが見つかりません');
@@ -251,7 +279,7 @@ export function createApp(
     res.json(publicUser(updated));
   });
 
-  api.delete('/users/:id', async (req, res) => {
+  api.delete('/users/:id', requireAdmin, async (req, res) => {
     const user = store.getUser(req.params.id);
     if (!user) throw new HttpError(404, 'ユーザーが見つかりません');
     await store.deleteUser(user.id);
@@ -306,7 +334,7 @@ export function createApp(
     });
   });
 
-  api.get('/history', (req, res) => {
+  api.get('/history', requireAdmin, (req, res) => {
     const { userId, result, type } = req.query;
     const page = store.listHistory({
       limit: parseLimit(req.query.limit, 100, 1000),
@@ -318,13 +346,13 @@ export function createApp(
     res.json(page);
   });
 
-  api.get('/history/:id/snapshot', (req, res) => {
+  api.get('/history/:id/snapshot', requireAdmin, (req, res) => {
     const file = store.snapshotPath(req.params.id);
     if (!file) throw new HttpError(404, 'スナップショットがありません');
     res.type('jpeg').sendFile(file);
   });
 
-  api.delete('/history', async (req, res) => {
+  api.delete('/history', requireAdmin, async (req, res) => {
     const removed = await store.clearHistory();
     res.json({ removed });
   });

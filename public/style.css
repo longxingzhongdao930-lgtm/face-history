@@ -52,6 +52,7 @@ body {
   padding: 16px;
 }
 .app-header h1 { margin: 0; font-size: 1.25rem; }
+.header-actions { display: flex; align-items: center; gap: 8px; }
 
 .pill {
   font-size: 0.8rem;
@@ -197,7 +198,7 @@ body {
 .btn.wide { width: 100%; margin-top: 12px; }
 
 .field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; font-size: 0.875rem; }
-input[type="text"], select {
+input[type="text"], input[type="password"], select {
   font: inherit;
   padding: 8px 10px;
   min-height: 40px;
