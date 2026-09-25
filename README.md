@@ -16,6 +16,9 @@
 - バックアップは PC 版と同じ形式です（PC 版 ⇄ スマホ版でデータを移せます）。設定タブから保存・復元できます。
 - データは端末ごとに独立しています（複数の端末で共有したい場合は PC 版を使ってください）。
 
+**公開 URL（GitHub Pages）**: https://longxingzhongdao930-lgtm.github.io/face-history/
+main に反映されると `.github/workflows/pages.yml` が自動で組み立てて公開します（リポジトリの Settings → Pages → Source を「GitHub Actions」にしておく必要があります）。
+
 ```bash
 npm run build:mobile   # dist/mobile に組み立て（この中身をそのまま公開する）
 npm run mobile         # 組み立てて http://127.0.0.1:3001 で確認
