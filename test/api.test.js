@@ -153,3 +153,18 @@ test('静的ファイルと face-api モデルを配信する', async () => {
   assert.equal((await fetch(`${base}/models/face_recognition_model-weights_manifest.json`)).status, 200);
   assert.equal((await call('GET', '/api/unknown')).status, 404);
 });
+
+test('POST /api/identify: 映っている顔の名前を返す（履歴には残さない）', async () => {
+  await call('POST', '/api/users', { name: 'Dave', descriptors: [vec(0.7)] });
+  const before = (await call('GET', '/api/history')).body.total;
+  const res = await call('POST', '/api/identify', { descriptors: [vec(0.71), vec(0.3)] });
+  assert.equal(res.status, 200);
+  assert.equal(res.body.results[0].name, 'Dave');
+  assert.equal(res.body.results[1].name, null, '未登録の顔は null');
+  assert.equal(res.body.results[0].id, undefined, 'ユーザー id は返さない');
+  assert.equal((await call('GET', '/api/history')).body.total, before);
+
+  assert.equal((await call('POST', '/api/identify', { descriptors: [] })).status, 400);
+  assert.equal((await call('POST', '/api/identify', { descriptors: [[1, 2]] })).status, 400);
+  assert.equal((await call('POST', '/api/identify', { descriptors: Array(11).fill(vec(0.1)) })).status, 400);
+});

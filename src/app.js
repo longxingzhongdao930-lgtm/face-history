@@ -14,6 +14,7 @@ const FACE_API_DIR = path.join(ROOT, 'node_modules', '@vladmandic', 'face-api');
 const MAX_NAME_LENGTH = 50;
 const MAX_SNAPSHOT_BYTES = 300 * 1024;
 const MAX_CHECKPOINTS = 10;
+const MAX_IDENTIFY_FACES = 10;
 /** クライアントとサーバーの時刻処理の差を吸収する許容誤差 */
 const CLOCK_SLACK_MS = 2000;
 
@@ -121,6 +122,8 @@ export function createApp(
   const authLimit = limit(tooMany);
   const challengeLimit = limit(tooMany);
   const loginLimit = limit(tooMany);
+  // カメラ映像の名前表示は 1 秒に数回呼ばれるため上限を別にする
+  const identifyLimit = rateLimit({ windowMs: 60_000, max: rateLimitPerMinute * 10, message: tooMany });
   // 復元は大きなファイル（スナップショット込み）を受け取るため、専用の上限を使う
   const RESTORE_PATH = '/api/backup/restore';
   const jsonBody = express.json({ limit: '2mb' });
@@ -303,6 +306,24 @@ export function createApp(
   });
 
   // 顔認証（結果は必ず履歴に保存）
+  // カメラに映っている顔が誰かを返す（画面に名前を表示するため）。
+  // 写真で登録者の名前を調べられないよう管理者のみ。履歴には残さない。
+  api.post('/identify', requireAdmin, identifyLimit, (req, res) => {
+    const list = req.body?.descriptors;
+    if (!Array.isArray(list) || list.length === 0 || list.length > MAX_IDENTIFY_FACES || !list.every(isValidDescriptor)) {
+      throw new HttpError(400, `descriptors は 1〜${MAX_IDENTIFY_FACES} 件の顔データで指定してください`);
+    }
+    const users = store.listUsers();
+    const results = list.map((d) => {
+      const match = findBestMatch(d, users, threshold);
+      return {
+        name: match.matched ? match.user.name : null,
+        distance: match.distance == null ? null : Number(match.distance.toFixed(4)),
+      };
+    });
+    res.json({ results });
+  });
+
   api.post('/auth', authLimit, async (req, res) => {
     const descriptor = req.body?.descriptor;
     if (!isValidDescriptor(descriptor)) {

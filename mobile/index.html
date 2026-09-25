@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#121418">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Face History">
+  <title>Face History</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Face History</h1>
+    <span id="model-status" class="pill">準備中…</span>
+  </header>
+
+  <section class="camera" aria-label="カメラ">
+    <video id="video" autoplay muted playsinline></video>
+    <canvas id="overlay"></canvas>
+    <button id="camera-start" class="camera-start" type="button">カメラを起動</button>
+    <div id="challenge-prompt" class="challenge-prompt" role="status" aria-live="assertive" hidden>
+      <span id="challenge-step" class="challenge-step"></span>
+      <strong id="challenge-text"></strong>
+      <span class="challenge-timer"><span id="challenge-timer"></span></span>
+    </div>
+    <div id="face-indicator" class="face-indicator" hidden></div>
+  </section>
+
+  <main class="panels">
+    <!-- 認証 -->
+    <section class="panel" id="panel-auth">
+      <button id="auth-button" class="btn primary big" type="button" disabled>認証する</button>
+      <p id="auth-hint" class="hint">顔を正面から映して「認証する」を押し、画面の指示に従ってください。</p>
+      <div id="auth-result" class="result" hidden></div>
+    </section>
+
+    <!-- 登録 -->
+    <section class="panel" id="panel-register" hidden>
+      <label class="field">
+        <span>名前</span>
+        <input id="register-name" type="text" maxlength="50" placeholder="例: 山田 太郎" autocomplete="off" enterkeyhint="done">
+      </label>
+      <button id="register-button" class="btn primary big" type="button" disabled>撮影して登録</button>
+      <p class="hint">画面の指示（まばたき・顔の向き・口を開ける）の後、正面を向いたまま 3 枚撮影します。</p>
+      <div id="register-result" class="result" hidden></div>
+    </section>
+
+    <!-- 履歴 -->
+    <section class="panel" id="panel-history" hidden>
+      <div class="row">
+        <select id="history-type" aria-label="種別">
+          <option value="">すべて</option>
+          <option value="auth">認証</option>
+          <option value="register">登録</option>
+          <option value="samples">サンプル追加</option>
+          <option value="delete">削除</option>
+          <option value="restore">復元</option>
+        </select>
+        <select id="history-result" aria-label="結果">
+          <option value="">成功・失敗</option>
+          <option value="success">成功</option>
+          <option value="failure">失敗</option>
+        </select>
+      </div>
+      <p id="history-summary" class="hint"></p>
+      <ul id="history-list" class="list"></ul>
+      <button id="history-more" class="btn wide" type="button" hidden>さらに表示</button>
+    </section>
+
+    <!-- 設定 -->
+    <section class="panel" id="panel-settings" hidden>
+      <h2>登録者</h2>
+      <ul id="user-list" class="list"></ul>
+
+      <h2>表示・認証</h2>
+      <label class="switch-row">
+        <span>カメラに映った登録者の名前を表示</span>
+        <input id="setting-names" type="checkbox" checked>
+      </label>
+      <label class="switch-row">
+        <span>ライブネス検知（写真でのなりすまし防止）</span>
+        <input id="setting-liveness" type="checkbox" checked>
+      </label>
+      <label class="field">
+        <span>照合の厳しさ <output id="setting-threshold-value"></output></span>
+        <input id="setting-threshold" type="range" min="0.35" max="0.65" step="0.01">
+        <small class="hint">左ほど厳しい（他人と間違えにくい）／右ほど緩い（本人が通りやすい）。標準 0.50</small>
+      </label>
+
+      <h2>バックアップ</h2>
+      <p class="hint">データはこのスマホの中だけに保存されています。機種変更や万一に備えて、ときどき保存してください。</p>
+      <div class="stack">
+        <button id="backup-export" class="btn wide" type="button">バックアップを保存</button>
+        <label class="btn wide file-btn">バックアップから復元
+          <input id="backup-import" type="file" accept="application/json,.json" hidden>
+        </label>
+        <button id="backup-undo" class="btn wide" type="button" hidden>直前の復元を取り消す</button>
+      </div>
+      <div id="backup-result" class="result" hidden></div>
+
+      <h2>その他</h2>
+      <div class="stack">
+        <button id="history-clear" class="btn wide danger" type="button">履歴をすべて削除</button>
+        <button id="delete-all" class="btn wide danger" type="button">すべてのデータを削除</button>
+      </div>
+      <p class="hint small">
+        ホーム画面に追加して使うと、データが消えにくくなります（Safari: 共有 → ホーム画面に追加）。
+        顔データはこの端末の外へ送信されません。
+      </p>
+    </section>
+  </main>
+
+  <nav class="tabbar" role="tablist">
+    <button class="tab active" role="tab" data-tab="auth" aria-selected="true">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-3.3 0-7 1.7-7 4v2h14v-2c0-2.3-3.7-4-7-4Z"/></svg>認証
+    </button>
+    <button class="tab" role="tab" data-tab="register" aria-selected="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Zm0 2c-3.3 0-7 1.7-7 4v2h14v-2c0-2.3-3.7-4-7-4ZM6 10V7H4v3H1v2h3v3h2v-3h3v-2H6Z"/></svg>登録
+    </button>
+    <button class="tab" role="tab" data-tab="history" aria-selected="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3a9 9 0 0 0-9 9H1l4 4 4-4H6a7 7 0 1 1 2.1 5l-1.4 1.4A9 9 0 1 0 13 3Zm-1 5v5l4.3 2.5.7-1.2-3.5-2.1V8H12Z"/></svg>履歴
+    </button>
+    <button class="tab" role="tab" data-tab="settings" aria-selected="false">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19.4 13a7.6 7.6 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.6 7.6 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.7 1.7 1L11 21h4l.4-2.9c.6-.3 1.2-.6 1.7-1l2.5 1 2-3.5-2.2-1.6ZM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>設定
+    </button>
+  </nav>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

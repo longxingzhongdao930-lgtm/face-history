@@ -7,6 +7,23 @@
 - モデルファイルは npm パッケージから配信するため、外部 CDN なしで動きます。
 - **ライブネス検知**（まばたき・顔の向き・口の動きによるチャレンジ）で、写真や静止画面によるなりすましを防ぎます。
 
+## スマホ版（PC 不要）
+
+`mobile/` は **サーバー不要でスマホだけで動く版** です。顔認識・ライブネス検知・照合・履歴・名前表示をすべてスマホのブラウザ内で行い、データはそのスマホの中（IndexedDB）だけに保存します。静的ファイルなので GitHub Pages などに置けば固定 URL で使えます。
+
+- ホーム画面に追加するとアプリのように使え、データも消えにくくなります（iPhone: Safari の共有 → ホーム画面に追加）。
+- 2 回目以降は顔認識モデルも端末に保存され、オフラインでも起動できます。
+- バックアップは PC 版と同じ形式です（PC 版 ⇄ スマホ版でデータを移せます）。設定タブから保存・復元できます。
+- データは端末ごとに独立しています（複数の端末で共有したい場合は PC 版を使ってください）。
+
+**公開 URL（GitHub Pages）**: https://longxingzhongdao930-lgtm.github.io/face-history/
+main に反映されると `.github/workflows/pages.yml` が自動で組み立てて公開します（リポジトリの Settings → Pages → Source を「GitHub Actions」にしておく必要があります）。
+
+```bash
+npm run build:mobile   # dist/mobile に組み立て（この中身をそのまま公開する）
+npm run mobile         # 組み立てて http://127.0.0.1:3001 で確認
+```
+
 ## 使い方
 
 ```bash
@@ -19,7 +36,8 @@ npm start
 2. **登録**タブ: 名前を入力して「撮影して登録」を押し、画面の指示に従います（ライブネス検知の後、正面を向いたまま 3 枚自動撮影）。
 3. **認証**タブ: 「認証する」を押し、カメラ映像に表示される指示（例:「顔をゆっくり左に向けてください」→「ゆっくりまばたきしてください」）に従います。最後に正面を向くと照合され、結果は自動で履歴に保存されます。
 4. **履歴**タブ: 認証の成功／失敗、登録・削除の記録を新しい順に表示します。認証時の顔のサムネイルも残ります。ライブネス検知に失敗した試行は「なりすまし疑い」として、提示された顔の人物名とともに記録されます。
-5. **ユーザー**タブ: サンプル追加（精度向上）とユーザー削除ができます。サンプル追加もライブネス検知が必要で、そのユーザー本人の顔（登録済みの顔と一致するもの）しか追加できません。
+5. **名前の表示**: カメラ起動中、登録済みの人が映ると顔の枠の上に名前が表示されます（未登録の顔は「未登録」）。写真で登録者の名前を調べられないよう、`ADMIN_PASSWORD` 設定時は管理者ログイン中の端末でのみ表示されます。カメラ下の「名前を表示」で切り替えできます。表示だけで、履歴には残りません。
+6. **ユーザー**タブ: サンプル追加（精度向上）とユーザー削除ができます。サンプル追加もライブネス検知が必要で、そのユーザー本人の顔（登録済みの顔と一致するもの）しか追加できません。
 
 > カメラはセキュアコンテキスト（`localhost` または HTTPS）でのみ使えます。スマートフォンから使う場合は下記「スマートフォンから使う（HTTPS）」を参照してください。
 
@@ -98,7 +116,8 @@ $env:ADMIN_PASSWORD="十分に長いパスワード"; npm run public
 
 **URL を固定する（任意）**
 
-Cloudflare のアカウントと、Cloudflare で管理している独自ドメインが必要です。
+- **Tailscale Funnel（無料・おすすめ）**: 下記「固定 URL で公開する（Tailscale Funnel）」を参照してください。
+- **Cloudflare ＋ 独自ドメイン**: `face.example.com` のような好きな URL にできます。Cloudflare のアカウントと、Cloudflare で管理している独自ドメインが必要です。
 
 1. Cloudflare ダッシュボードの **Zero Trust → Networks → Tunnels** でトンネルを作成し、表示されるトークンを控える
 2. トンネルの **Public Hostname** に、使いたいホスト名（例: `face.example.com`）とサービス `http://localhost:3000` を設定する
@@ -107,6 +126,47 @@ Cloudflare のアカウントと、Cloudflare で管理している独自ドメ�
 ```bash
 ADMIN_PASSWORD='十分に長いパスワード' TUNNEL_TOKEN='控えたトークン' npm run public
 ```
+
+### 固定 URL で公開する（Tailscale Funnel）
+
+無料で、`https://<PC名>.<tailnet名>.ts.net` の **固定 URL** で公開できます。Cloudflare Tunnel と同じく、顔データは手元の PC に保存されたままです。
+
+**1. 準備（初回のみ）**
+
+1. https://login.tailscale.com/start で Tailscale の無料アカウントを作成（Google アカウント等でログイン可）
+2. Tailscale をインストールし、アプリを起動してログイン
+
+   ```bash
+   # Windows（PowerShell）
+   winget install --id tailscale.tailscale
+   # Mac
+   brew install --cask tailscale
+   ```
+
+3. ターミナルを開き直す
+
+**2. 公開する**
+
+**Windows はダブルクリックで起動できます。** フォルダ内の `start-public.bat` をダブルクリックすると、最新版への更新（`git pull`）→ 公開までを自動で行います。初回だけ管理者パスワードを聞かれ、`.env` に保存されます（GitHub には上がりません）。デスクトップにショートカットを作っておくと便利です（右クリック → 送る → デスクトップ）。
+
+ターミナルから起動する場合:
+
+```bash
+# Mac / Linux
+ADMIN_PASSWORD='十分に長いパスワード' npm run public:tailscale
+
+# Windows（PowerShell）
+$env:ADMIN_PASSWORD="十分に長いパスワード"; npm run public:tailscale
+```
+
+- **初回だけ**、`https://login.tailscale.com/...` というリンクが表示されます。ブラウザで開き、Funnel（と HTTPS）の利用を許可してください。許可すると自動で公開が始まります。
+- 「インターネットに公開しました」と固定 URL が表示されたら完了です。次回以降も同じ URL です。
+- 停止は `Ctrl+C`（サーバーと Funnel の両方が止まります）。
+- URL の `<PC名>` の部分は、Tailscale の管理画面（Machines → 対象の PC → Edit machine name）で `face-history` などに変更できます。
+- Funnel のこの使い方には Tailscale 1.52 以降が必要です。
+- `listener already exists for port 443` と表示されて止まる場合は、以前の Funnel / Serve の設定が残っています。Windows なら `Stop-Process -Name tailscale -ErrorAction SilentlyContinue` → `tailscale serve reset` を実行してから再度起動してください（この PC の Serve / Funnel 設定がすべて消去されます）。
+- 異常終了などで Funnel が残った場合は `tailscale funnel --https=443 off` で無効にできます。
+- Windows では、公開中の PowerShell の画面をクリックすると「選択」モードになり処理が一時停止します。タイトルに「選択」と出たら `Esc` で解除してください。
 
 ### スマートフォンから使う（HTTPS）
 
@@ -126,6 +186,8 @@ TLS_CERT=./192.168.1.10+1.pem TLS_KEY=./192.168.1.10+1-key.pem npm start
 
 ## 設定（環境変数）
 
+`npm run public` / `npm run public:tailscale` は、プロジェクト直下の `.env` ファイル（例: `ADMIN_PASSWORD="..."`）も読み込みます。環境変数が優先されます。
+
 | 変数 | 既定値 | 説明 |
 | --- | --- | --- |
 | `PORT` | `3000` | 待ち受けポート |
@@ -135,7 +197,8 @@ TLS_CERT=./192.168.1.10+1.pem TLS_KEY=./192.168.1.10+1-key.pem npm start
 | `ADMIN_PASSWORD` | （なし） | 管理者パスワード（8 文字以上）。設定すると登録・履歴・ユーザー管理がログイン必須になる |
 | `TLS_CERT` / `TLS_KEY` | （なし） | HTTPS で起動する場合の証明書・秘密鍵ファイルのパス |
 | `PUBLIC` | （なし） | `1` でインターネット公開モード（`ADMIN_PASSWORD` 必須）。`npm run public` が自動で設定 |
-| `TUNNEL_TOKEN` | （なし） | `npm run public` で固定 URL のトンネルを使う場合のトークン |
+| `TUNNEL_TOKEN` | （なし） | `npm run public` で Cloudflare の固定 URL トンネルを使う場合のトークン |
+| `TUNNEL` | `cloudflare` | `npm run public` で使うトンネル（`cloudflare` / `tailscale`）。`npm run public:tailscale` は `tailscale` と同じ |
 | `TRUST_PROXY` | （なし） | リバースプロキシ配下で動かす場合に設定（Express の `trust proxy`。例: `1`） |
 | `BACKUP_INTERVAL_HOURS` | `0` | 定期バックアップの間隔（時間）。`0` で無効 |
 | `BACKUP_KEEP` | `7` | 定期バックアップを残す件数 |
@@ -195,6 +258,7 @@ data/
 | `POST` | `/api/users` 🔒 | 顔登録 `{ name, descriptors: number[128][], liveness? }`（ライブネス失敗時は 422） |
 | `POST` | `/api/users/:id/samples` 🔒 | サンプル追加 `{ descriptors, liveness? }`（本人の顔と一致しない場合は 403） |
 | `DELETE` | `/api/users/:id` 🔒 | ユーザー削除 |
+| `POST` | `/api/identify` 🔒 | 映っている顔の名前 `{ descriptors: number[128][] }`（最大 10 件）→ `{ results: [{ name, distance }] }`。履歴には残さない |
 | `POST` | `/api/auth` | 顔認証 `{ descriptor: number[128], snapshot?: "data:image/jpeg;base64,...", liveness?: { challengeId, frames: { t, points: number[68][2] }[], checkpoints: number[128][] } }`（`liveness` は検知有効時に必須。登録・サンプル追加も同じ形式） |
 | `GET` | `/api/history` 🔒 | 履歴 `?limit&offset&type=auth\|register\|samples\|delete\|backup\|restore&result=success\|failure&userId` |
 | `GET` | `/api/history/:id/snapshot` 🔒 | 認証時のサムネイル |

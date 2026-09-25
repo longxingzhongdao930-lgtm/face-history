@@ -17,6 +17,8 @@ const els = {
   placeholder: $('#camera-placeholder'),
   cameraToggle: $('#camera-toggle'),
   faceIndicator: $('#face-indicator'),
+  liveNames: $('#live-names'),
+  liveNamesLabel: $('#live-names-label'),
   authCamera: $('#auth-camera'),
   authFile: $('#auth-file'),
   authFileLabel: $('#auth-file-label'),
@@ -257,17 +259,45 @@ function setIndicator(text, kind) {
   els.faceIndicator.className = `face-indicator ${kind}`;
 }
 
+/** カメラに映った登録者の名前を表示するか（写真で名前を調べられないよう管理者のみ） */
+const canShowNames = () => els.liveNames.checked && canAdmin();
+
+async function detectLive(video) {
+  if (!canShowNames()) {
+    const detections = await faceapi.detectAllFaces(video, liveOptions());
+    return { boxes: detections.map((d) => d.box), labels: [] };
+  }
+  const faces = await faceapi.detectAllFaces(video, liveOptions()).withFaceLandmarks().withFaceDescriptors();
+  const boxes = faces.map((f) => f.detection.box);
+  if (faces.length === 0) return { boxes, labels: [] };
+  try {
+    const { results } = await api('/identify', {
+      method: 'POST',
+      body: { descriptors: faces.slice(0, 10).map((f) => Array.from(f.descriptor)) },
+    });
+    return { boxes, labels: results.map((r) => ({ text: r.name ?? '未登録', known: Boolean(r.name) })) };
+  } catch {
+    // ログアウト・回数制限などの場合は枠だけ表示する
+    return { boxes, labels: [] };
+  }
+}
+
 function startLiveDetection() {
   const tick = async () => {
     if (!state.stream) return;
     const video = els.video;
     if (state.modelsReady && !state.busy && video.readyState >= 2 && video.videoWidth) {
       try {
-        const detections = await faceapi.detectAllFaces(video, liveOptions());
-        drawOverlay(detections);
-        if (detections.length === 1) setIndicator('顔を検出中', 'ok');
-        else if (detections.length > 1) setIndicator(`${detections.length} 人検出（1 人にしてください）`, 'warn');
-        else setIndicator('顔が見つかりません', 'warn');
+        const { boxes, labels } = await detectLive(video);
+        // 認証・登録の処理が始まっていたら、その表示を上書きしない
+        if (!state.busy) {
+          drawOverlay(boxes, labels);
+          const names = labels.filter((l) => l.known).map((l) => l.text);
+          if (names.length) setIndicator(`${names.join('、')} さん`, 'ok');
+          else if (boxes.length === 1) setIndicator(labels.length ? '未登録の顔です' : '顔を検出中', labels.length ? 'warn' : 'ok');
+          else if (boxes.length > 1) setIndicator(`${boxes.length} 人検出`, 'warn');
+          else setIndicator('顔が見つかりません', 'warn');
+        }
       } catch (err) {
         console.warn(err);
       }
@@ -277,18 +307,47 @@ function startLiveDetection() {
   tick();
 }
 
-function drawOverlay(detections) {
+/**
+ * 顔の枠（と名前）を描く。
+ * @param {Array<{x:number,y:number,width:number,height:number}|{box:object}>} items 顔の枠
+ * @param {{text:string, known:boolean}[]} labels items と同じ順の名前（省略可）
+ */
+function drawOverlay(items, labels = []) {
   const { overlay, video } = els;
-  overlay.width = video.videoWidth;
+  const W = (overlay.width = video.videoWidth);
   overlay.height = video.videoHeight;
   const ctx = overlay.getContext('2d');
-  ctx.clearRect(0, 0, overlay.width, overlay.height);
-  ctx.lineWidth = Math.max(2, overlay.width / 200);
-  ctx.strokeStyle = detections.length === 1 ? '#4fd1a1' : '#ff7b70';
-  for (const d of detections) {
-    const { x, y, width, height } = d.box;
+  ctx.clearRect(0, 0, W, overlay.height);
+  const line = Math.max(2, W / 200);
+  const boxes = items.map((d) => d.box ?? d);
+
+  boxes.forEach(({ x, y, width, height }, i) => {
+    const label = labels[i];
+    const color = label ? (label.known ? '#4fd1a1' : '#ffb454') : boxes.length === 1 ? '#4fd1a1' : '#ff7b70';
+    ctx.lineWidth = line;
+    ctx.strokeStyle = color;
     ctx.strokeRect(x, y, width, height);
-  }
+    if (!label) return;
+
+    // 映像は CSS で左右反転表示しているため、文字は反転し直して描く
+    const fontSize = Math.max(14, Math.round(W / 28));
+    ctx.save();
+    ctx.translate(W, 0);
+    ctx.scale(-1, 1);
+    ctx.font = `bold ${fontSize}px system-ui, sans-serif`;
+    const text = label.known ? `${label.text} さん` : label.text;
+    const padX = fontSize * 0.4;
+    const w = ctx.measureText(text).width + padX * 2;
+    const h = fontSize * 1.5;
+    const left = W - x - width; // 画面上の枠の左端
+    const top = y - h - line > 0 ? y - h - line : y + height + line; // 上に入らなければ枠の下
+    ctx.fillStyle = color;
+    ctx.fillRect(left - line / 2, top, w, h);
+    ctx.fillStyle = '#0b1020';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, left - line / 2 + padX, top + h / 2);
+    ctx.restore();
+  });
 }
 
 // ---------------------------------------------------------------- auth
@@ -737,6 +796,10 @@ document.querySelectorAll('.tab').forEach((tab) => {
 
 function updateAdminUI() {
   els.adminButton.hidden = !state.admin.enabled;
+  els.liveNames.disabled = !canAdmin();
+  els.liveNamesLabel.title = canAdmin()
+    ? '登録者がカメラに映ると名前を表示します'
+    : '名前の表示には管理者ログインが必要です';
   els.adminButton.textContent = state.admin.loggedIn ? 'ログアウト' : '管理者ログイン';
 }
 

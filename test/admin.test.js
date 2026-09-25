@@ -53,6 +53,7 @@ test('未ログインでは管理 API が 401、顔認証と設定は利用で�
     ['GET', '/api/history/x/snapshot'],
     ['DELETE', '/api/history'],
     ['GET', '/api/backup'],
+    ['POST', '/api/identify', { descriptors: [vec(0.1)] }],
     ['POST', '/api/backup/restore', { format: 'face-history-backup' }],
   ]) {
     const res = await call(method, url, { body });
