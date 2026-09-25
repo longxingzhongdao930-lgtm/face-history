@@ -44,6 +44,11 @@ const els = {
   loginPanel: $('#panel-login'),
   adminPassword: $('#admin-password'),
   loginResult: $('#login-result'),
+  backupDownload: $('#backup-download'),
+  backupSnapshots: $('#backup-snapshots'),
+  restoreMode: $('#restore-mode'),
+  restoreFile: $('#restore-file'),
+  restoreResult: $('#restore-result'),
 };
 
 const state = {
@@ -575,9 +580,59 @@ els.userList.addEventListener('click', (e) => {
   }
 });
 
+// ---------------------------------------------------------------- backup
+
+els.backupSnapshots.addEventListener('change', () => {
+  els.backupDownload.href = els.backupSnapshots.checked ? '/api/backup' : '/api/backup?snapshots=0';
+});
+// ダウンロードの記録が履歴に残るので、少し待ってから再読み込みする
+els.backupDownload.addEventListener('click', () => setTimeout(() => refreshHistory(), 1500));
+
+els.restoreFile.addEventListener('change', async () => {
+  const [file] = els.restoreFile.files;
+  els.restoreFile.value = '';
+  if (!file) return;
+  const mode = els.restoreMode.value;
+  const message =
+    mode === 'replace'
+      ? `「${file.name}」で現在のデータをすべて置き換えます。よろしいですか？\n（現在のデータはサーバーに自動で保存されます）`
+      : `「${file.name}」のユーザー・履歴を追加します。よろしいですか？`;
+  if (!confirm(message)) return;
+
+  showResult(els.restoreResult, 'info', '復元中…');
+  try {
+    const body = await file.text();
+    const res = await fetch(`/api/backup/restore?mode=${mode}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+    const meta = [
+      data.skippedUsers.length ? `重複のため追加しなかったユーザー: ${data.skippedUsers.join('、')}` : '',
+      data.preRestoreBackup ? `復元前のデータ: data/backups/${data.preRestoreBackup}` : '',
+    ]
+      .filter(Boolean)
+      .join('・');
+    showResult(els.restoreResult, 'success', `復元しました（ユーザー ${data.users} 件・履歴 ${data.history} 件）`, meta);
+    refreshUsers();
+    refreshHistory();
+  } catch (err) {
+    showResult(els.restoreResult, 'failure', `復元できませんでした: ${err.message}`);
+  }
+});
+
 // ---------------------------------------------------------------- history
 
-const TYPE_LABEL = { auth: '認証', register: '登録', samples: 'サンプル追加', delete: '削除' };
+const TYPE_LABEL = {
+  auth: '認証',
+  register: '登録',
+  samples: 'サンプル追加',
+  delete: '削除',
+  backup: 'バックアップ',
+  restore: '復元',
+};
 
 function historyItem(h) {
   const thumb = h.hasSnapshot
@@ -597,7 +652,8 @@ function historyItem(h) {
     title = `${h.userName}（${TYPE_LABEL[h.type]}・なりすまし疑い）`;
     badge = el('span', { className: 'badge failure', textContent: 'ライブネス失敗' });
   } else {
-    title = h.userName;
+    // バックアップ・復元は特定のユーザーに紐づかない
+    title = h.userName ?? TYPE_LABEL[h.type] ?? h.type;
     badge = el('span', { className: 'badge neutral', textContent: TYPE_LABEL[h.type] ?? h.type });
   }
   const sub = [formatDate(h.timestamp)];

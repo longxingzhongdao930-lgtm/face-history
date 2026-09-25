@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { ACTIONS, verifyFrames } from '../public/shared/liveness.js';
 import { AdminAuth } from './admin.js';
+import { BackupError, backupFileName, parseBackup, writeBackupFile } from './backup.js';
 import { ChallengeStore } from './challenges.js';
 import { euclideanDistance, findBestMatch, isValidDescriptor } from './matcher.js';
 
@@ -103,13 +104,17 @@ export function createApp(
     challenges = new ChallengeStore(),
     admin = new AdminAuth(),
     trustProxy = false,
+    backupDir = path.join(store.dataDir, 'backups'),
   } = {},
 ) {
   const app = express();
   app.disable('x-powered-by');
   // リバースプロキシ配下では、ログイン失敗の IP 判定と Secure Cookie のために必要
   app.set('trust proxy', trustProxy);
-  app.use(express.json({ limit: '2mb' }));
+  // 復元は大きなファイル（スナップショット込み）を受け取るため、専用の上限を使う
+  const RESTORE_PATH = '/api/backup/restore';
+  const jsonBody = express.json({ limit: '2mb' });
+  app.use((req, res, next) => (req.path === RESTORE_PATH ? next() : jsonBody(req, res, next)));
 
   // ---- static ----
   app.use(express.static(path.join(ROOT, 'public')));
@@ -341,7 +346,7 @@ export function createApp(
       offset: parseLimit(req.query.offset, 0, Number.MAX_SAFE_INTEGER),
       userId: typeof userId === 'string' ? userId : undefined,
       result: result === 'success' || result === 'failure' ? result : undefined,
-      type: ['auth', 'register', 'samples', 'delete'].includes(type) ? type : undefined,
+      type: ['auth', 'register', 'samples', 'delete', 'backup', 'restore'].includes(type) ? type : undefined,
     });
     res.json(page);
   });
@@ -350,6 +355,43 @@ export function createApp(
     const file = store.snapshotPath(req.params.id);
     if (!file) throw new HttpError(404, 'スナップショットがありません');
     res.type('jpeg').sendFile(file);
+  });
+
+  // バックアップのダウンロード（生体情報を含むため、取得したことを履歴に残す）
+  api.get('/backup', requireAdmin, async (req, res) => {
+    const includeSnapshots = req.query.snapshots !== '0';
+    const data = await store.exportData({ includeSnapshots });
+    await store.addHistory({
+      type: 'backup',
+      result: 'success',
+      detail: `ユーザー ${data.users.length} 件・履歴 ${data.history.length} 件${includeSnapshots ? '' : '（画像なし）'}`,
+    });
+    res.attachment(backupFileName());
+    res.json(data);
+  });
+
+  // バックアップからの復元。replace の前には現在のデータを自動で退避する
+  api.post('/backup/restore', requireAdmin, express.json({ limit: '200mb' }), async (req, res) => {
+    const mode = req.query.mode === 'merge' ? 'merge' : 'replace';
+    let parsed;
+    try {
+      parsed = parseBackup(req.body, { maxSamples });
+    } catch (err) {
+      if (err instanceof BackupError) throw new HttpError(400, err.message);
+      throw err;
+    }
+
+    const preRestoreBackup =
+      mode === 'replace' ? path.basename(await writeBackupFile(store, backupDir, 'pre-restore')) : null;
+    const result = await store.restoreData(parsed, { mode });
+    await store.addHistory({
+      type: 'restore',
+      result: 'success',
+      detail:
+        `${mode === 'replace' ? '置き換え' : '追加'}: ユーザー ${result.users} 件・履歴 ${result.history} 件` +
+        (result.skippedUsers.length ? `（重複のためスキップ: ${result.skippedUsers.join('、')}）` : ''),
+    });
+    res.json({ mode, ...result, preRestoreBackup });
   });
 
   api.delete('/history', requireAdmin, async (req, res) => {
