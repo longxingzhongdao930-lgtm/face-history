@@ -98,7 +98,8 @@ $env:ADMIN_PASSWORD="十分に長いパスワード"; npm run public
 
 **URL を固定する（任意）**
 
-Cloudflare のアカウントと、Cloudflare で管理している独自ドメインが必要です。
+- **Tailscale Funnel（無料・おすすめ）**: 下記「固定 URL で公開する（Tailscale Funnel）」を参照してください。
+- **Cloudflare ＋ 独自ドメイン**: `face.example.com` のような好きな URL にできます。Cloudflare のアカウントと、Cloudflare で管理している独自ドメインが必要です。
 
 1. Cloudflare ダッシュボードの **Zero Trust → Networks → Tunnels** でトンネルを作成し、表示されるトークンを控える
 2. トンネルの **Public Hostname** に、使いたいホスト名（例: `face.example.com`）とサービス `http://localhost:3000` を設定する
@@ -107,6 +108,40 @@ Cloudflare のアカウントと、Cloudflare で管理している独自ドメ�
 ```bash
 ADMIN_PASSWORD='十分に長いパスワード' TUNNEL_TOKEN='控えたトークン' npm run public
 ```
+
+### 固定 URL で公開する（Tailscale Funnel）
+
+無料で、`https://<PC名>.<tailnet名>.ts.net` の **固定 URL** で公開できます。Cloudflare Tunnel と同じく、顔データは手元の PC に保存されたままです。
+
+**1. 準備（初回のみ）**
+
+1. https://login.tailscale.com/start で Tailscale の無料アカウントを作成（Google アカウント等でログイン可）
+2. Tailscale をインストールし、アプリを起動してログイン
+
+   ```bash
+   # Windows（PowerShell）
+   winget install --id tailscale.tailscale
+   # Mac
+   brew install --cask tailscale
+   ```
+
+3. ターミナルを開き直す
+
+**2. 公開する**
+
+```bash
+# Mac / Linux
+ADMIN_PASSWORD='十分に長いパスワード' npm run public:tailscale
+
+# Windows（PowerShell）
+$env:ADMIN_PASSWORD="十分に長いパスワード"; npm run public:tailscale
+```
+
+- **初回だけ**、`https://login.tailscale.com/...` というリンクが表示されます。ブラウザで開き、Funnel（と HTTPS）の利用を許可してください。許可すると自動で公開が始まります。
+- 「インターネットに公開しました」と固定 URL が表示されたら完了です。次回以降も同じ URL です。
+- 停止は `Ctrl+C`（サーバーと Funnel の両方が止まります）。
+- URL の `<PC名>` の部分は、Tailscale の管理画面（Machines → 対象の PC → Edit machine name）で `face-history` などに変更できます。
+- Funnel のこの使い方には Tailscale 1.52 以降が必要です。
 
 ### スマートフォンから使う（HTTPS）
 
@@ -135,7 +170,8 @@ TLS_CERT=./192.168.1.10+1.pem TLS_KEY=./192.168.1.10+1-key.pem npm start
 | `ADMIN_PASSWORD` | （なし） | 管理者パスワード（8 文字以上）。設定すると登録・履歴・ユーザー管理がログイン必須になる |
 | `TLS_CERT` / `TLS_KEY` | （なし） | HTTPS で起動する場合の証明書・秘密鍵ファイルのパス |
 | `PUBLIC` | （なし） | `1` でインターネット公開モード（`ADMIN_PASSWORD` 必須）。`npm run public` が自動で設定 |
-| `TUNNEL_TOKEN` | （なし） | `npm run public` で固定 URL のトンネルを使う場合のトークン |
+| `TUNNEL_TOKEN` | （なし） | `npm run public` で Cloudflare の固定 URL トンネルを使う場合のトークン |
+| `TUNNEL` | `cloudflare` | `npm run public` で使うトンネル（`cloudflare` / `tailscale`）。`npm run public:tailscale` は `tailscale` と同じ |
 | `TRUST_PROXY` | （なし） | リバースプロキシ配下で動かす場合に設定（Express の `trust proxy`。例: `1`） |
 | `BACKUP_INTERVAL_HOURS` | `0` | 定期バックアップの間隔（時間）。`0` で無効 |
 | `BACKUP_KEEP` | `7` | 定期バックアップを残す件数 |
