@@ -9,7 +9,9 @@
     "test": "node --test test/*.test.js",
     "backup": "node scripts/backup.js",
     "public": "node scripts/public.js",
-    "public:tailscale": "node scripts/public.js --tailscale"
+    "public:tailscale": "node scripts/public.js --tailscale",
+    "build:mobile": "node scripts/build-mobile.js",
+    "mobile": "node scripts/build-mobile.js && node scripts/serve-mobile.js"
   },
   "engines": {
     "node": ">=22"
