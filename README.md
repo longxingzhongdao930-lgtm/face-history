@@ -54,6 +54,60 @@ npm run backup -- --no-snapshots        # 顔画像を含めない（ファイ�
 npm run backup -- --keep 7              # manual-*.json を新しい 7 件だけ残す
 ```
 
+### インターネットに公開する（Cloudflare Tunnel）
+
+自分の PC で動かしたまま、`https://〜.trycloudflare.com` の URL でどこからでも開けるようにします。**サーバー契約は不要（無料）で、顔データは手元の PC に保存されたまま** です。PC を起動している間だけ公開されます。
+
+**1. cloudflared をインストール（初回のみ）**
+
+```bash
+# Windows（PowerShell）
+winget install --id Cloudflare.cloudflared
+# Mac
+brew install cloudflared
+```
+
+インストール後はターミナルを開き直してください。
+
+**2. 公開する**
+
+```bash
+# Mac / Linux
+ADMIN_PASSWORD='十分に長いパスワード' npm run public
+
+# Windows（PowerShell）
+$env:ADMIN_PASSWORD="十分に長いパスワード"; npm run public
+```
+
+接続できると、次のように公開 URL が表示されます。スマートフォンなどでこの URL を開いてください（HTTPS なのでカメラも使えます）。
+
+```
+================================================================
+  インターネットに公開しました
+  URL: https://xxxx-xxxx-xxxx.trycloudflare.com
+  ...
+================================================================
+```
+
+- 停止は `Ctrl+C`（サーバーとトンネルの両方が止まります）。
+- `ADMIN_PASSWORD`（8 文字以上）は必須です。登録・履歴・ユーザー管理はログインしないと使えません。顔認証は誰でも使えます。
+- 認証・ログインなど誰でも呼べる API は、アクセス元 IP ごとに 1 分 30 回までに制限しています。
+- **URL は起動するたびに変わります。** 固定したい場合は下記「URL を固定する」を参照してください。
+- 「トンネルに接続できません」と表示される場合は、ネットワーク（会社・学校など）で Cloudflare への通信が制限されている可能性があります。別の回線で試すか、`CLOUDFLARED_PROTOCOL=http2` を付けて実行してください。
+- Cloudflare の無料プランでは 1 回のアップロードが 100MB までのため、それより大きなバックアップはトンネル経由では復元できません（PC 上で `http://127.0.0.1:3000` を開いて復元してください）。
+
+**URL を固定する（任意）**
+
+Cloudflare のアカウントと、Cloudflare で管理している独自ドメインが必要です。
+
+1. Cloudflare ダッシュボードの **Zero Trust → Networks → Tunnels** でトンネルを作成し、表示されるトークンを控える
+2. トンネルの **Public Hostname** に、使いたいホスト名（例: `face.example.com`）とサービス `http://localhost:3000` を設定する
+3. トークンを指定して起動する
+
+```bash
+ADMIN_PASSWORD='十分に長いパスワード' TUNNEL_TOKEN='控えたトークン' npm run public
+```
+
 ### スマートフォンから使う（HTTPS）
 
 スマートフォンのブラウザでカメラを使うには HTTPS が必要です。証明書を用意して `TLS_CERT` / `TLS_KEY` を指定すると、HTTPS で起動します。
@@ -80,6 +134,8 @@ TLS_CERT=./192.168.1.10+1.pem TLS_KEY=./192.168.1.10+1-key.pem npm start
 | `FACE_THRESHOLD` | `0.5` | 照合のしきい値（ユークリッド距離）。小さいほど厳格。推奨 0.4〜0.6 |
 | `ADMIN_PASSWORD` | （なし） | 管理者パスワード（8 文字以上）。設定すると登録・履歴・ユーザー管理がログイン必須になる |
 | `TLS_CERT` / `TLS_KEY` | （なし） | HTTPS で起動する場合の証明書・秘密鍵ファイルのパス |
+| `PUBLIC` | （なし） | `1` でインターネット公開モード（`ADMIN_PASSWORD` 必須）。`npm run public` が自動で設定 |
+| `TUNNEL_TOKEN` | （なし） | `npm run public` で固定 URL のトンネルを使う場合のトークン |
 | `TRUST_PROXY` | （なし） | リバースプロキシ配下で動かす場合に設定（Express の `trust proxy`。例: `1`） |
 | `BACKUP_INTERVAL_HOURS` | `0` | 定期バックアップの間隔（時間）。`0` で無効 |
 | `BACKUP_KEEP` | `7` | 定期バックアップを残す件数 |
@@ -149,7 +205,8 @@ data/
 ## 注意事項
 
 - ライブネス検知はカメラ映像の動きに基づく簡易的なもので、認証を受けた PAD（なりすまし検知）製品ではありません。写真・静止画面・録画の再生は防げますが、精巧なマスクや、API を直接呼び出して偽のランドマークを送る攻撃は防げません。入退室管理など厳密な本人確認には単独で使わないでください。
-- 既定では `127.0.0.1` でのみ待ち受けます。外部に公開する場合は `ADMIN_PASSWORD` の設定（必須）に加え、HTTPS で運用してください（HTTP ではパスワードが平文で流れます）。
+- 既定では `127.0.0.1` でのみ待ち受けます。外部に公開する場合は `ADMIN_PASSWORD` の設定（必須）に加え、HTTPS で運用してください（HTTP ではパスワードが平文で流れます）。`npm run public`（Cloudflare Tunnel）は自動的に HTTPS になります。
+- 公開 URL を知っている人は誰でも顔認証を試せます（結果は履歴に残ります）。URL は必要な人にだけ共有してください。
 
 ## テスト
 

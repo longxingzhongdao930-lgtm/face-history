@@ -12,6 +12,8 @@ const DATA_DIR = path.resolve(process.env.DATA_DIR ?? 'data');
 const THRESHOLD = Number(process.env.FACE_THRESHOLD ?? 0.5);
 const LIVENESS = (process.env.LIVENESS ?? 'on').toLowerCase() !== 'off';
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? '';
+// トンネル等でインターネットに公開している（HOST は 127.0.0.1 のままでも外部から届く）
+const PUBLIC = process.env.PUBLIC === '1';
 const TLS_CERT = process.env.TLS_CERT;
 const TLS_KEY = process.env.TLS_KEY;
 const BACKUP_DIR = path.resolve(process.env.BACKUP_DIR ?? path.join(DATA_DIR, 'backups'));
@@ -37,9 +39,9 @@ if (Boolean(TLS_CERT) !== Boolean(TLS_KEY)) {
   fail('HTTPS を使う場合は TLS_CERT と TLS_KEY の両方を指定してください');
 }
 const isLoopback = ['127.0.0.1', 'localhost', '::1'].includes(HOST);
-if (!isLoopback && !ADMIN_PASSWORD) {
+if ((PUBLIC || !isLoopback) && !ADMIN_PASSWORD) {
   // 顔データ（生体情報）の登録・削除・履歴を、ネットワーク上の誰でも操作できてしまうため
-  fail(`HOST=${HOST} で公開する場合は ADMIN_PASSWORD を設定してください`);
+  fail(`${PUBLIC ? 'インターネットに公開する' : `HOST=${HOST} で公開する`}場合は ADMIN_PASSWORD を設定してください`);
 }
 if (!Number.isFinite(BACKUP_INTERVAL_HOURS) || BACKUP_INTERVAL_HOURS < 0) {
   fail('BACKUP_INTERVAL_HOURS は 0 以上の数値で指定してください（0 で定期バックアップなし）');

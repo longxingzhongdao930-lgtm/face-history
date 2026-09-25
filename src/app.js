@@ -5,6 +5,7 @@ import { ACTIONS, verifyFrames } from '../public/shared/liveness.js';
 import { AdminAuth } from './admin.js';
 import { BackupError, backupFileName, parseBackup, writeBackupFile } from './backup.js';
 import { ChallengeStore } from './challenges.js';
+import { rateLimit, securityHeaders } from './security.js';
 import { euclideanDistance, findBestMatch, isValidDescriptor } from './matcher.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -105,12 +106,21 @@ export function createApp(
     admin = new AdminAuth(),
     trustProxy = false,
     backupDir = path.join(store.dataDir, 'backups'),
+    // 誰でも呼べる API（認証・チャレンジ・ログイン）の IP ごとの上限（1 分あたり）
+    rateLimitPerMinute = 30,
   } = {},
 ) {
   const app = express();
   app.disable('x-powered-by');
   // リバースプロキシ配下では、ログイン失敗の IP 判定と Secure Cookie のために必要
   app.set('trust proxy', trustProxy);
+  app.use(securityHeaders);
+
+  const limit = (message) => rateLimit({ windowMs: 60_000, max: rateLimitPerMinute, message });
+  const tooMany = 'リクエストが多すぎます。しばらくしてから再度お試しください';
+  const authLimit = limit(tooMany);
+  const challengeLimit = limit(tooMany);
+  const loginLimit = limit(tooMany);
   // 復元は大きなファイル（スナップショット込み）を受け取るため、専用の上限を使う
   const RESTORE_PATH = '/api/backup/restore';
   const jsonBody = express.json({ limit: '2mb' });
@@ -162,7 +172,7 @@ export function createApp(
     res.json({ enabled: admin.enabled, loggedIn: admin.isLoggedIn(req) });
   });
 
-  api.post('/admin/login', (req, res) => {
+  api.post('/admin/login', loginLimit, (req, res) => {
     if (!admin.enabled) throw new HttpError(404, '管理者パスワードが設定されていません');
     const result = admin.login(req, res, req.body?.password);
     if (result.ok) return res.status(204).end();
@@ -180,7 +190,7 @@ export function createApp(
   });
 
   // ライブネス検知: ランダムな動作指示を発行
-  api.post('/liveness/challenge', (req, res) => {
+  api.post('/liveness/challenge', challengeLimit, (req, res) => {
     if (!liveness) throw new HttpError(404, 'ライブネス検知は無効です');
     const c = challenges.issue();
     res.status(201).json({
@@ -293,7 +303,7 @@ export function createApp(
   });
 
   // 顔認証（結果は必ず履歴に保存）
-  api.post('/auth', async (req, res) => {
+  api.post('/auth', authLimit, async (req, res) => {
     const descriptor = req.body?.descriptor;
     if (!isValidDescriptor(descriptor)) {
       throw new HttpError(400, 'descriptor の形式が不正です（128 次元の数値配列が必要）');
