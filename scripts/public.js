@@ -69,12 +69,21 @@ const providers = {
       '',
       'インストール後、Tailscale アプリを起動してログインしてください。',
     ],
-    // フォアグラウンドで Funnel を有効にし、終了（Ctrl+C）で無効に戻る
-    args: () => ['funnel', PORT],
+    // Funnel をバックグラウンド設定で有効にする（コマンドは設定後すぐ終了する）。
+    // フォアグラウンド実行（tailscale funnel <port>）は Windows で設定が維持されず、
+    // 公開 DNS にも登録されないことがあったため使わない。停止時に off で無効に戻す。
+    args: () => ['funnel', '--bg', PORT],
+    background: true,
+    offArgs: ['funnel', '--https=443', 'off'],
     fixedUrl: true,
+    state: { url: null },
     onLine(line) {
       const url = line.match(/https:\/\/[a-z0-9-]+(\.[a-z0-9-]+)*\.ts\.net\/?/)?.[0];
-      return url ? { connected: true, url: url.replace(/\/$/, '') } : null;
+      if (url) this.state.url = url.replace(/\/$/, '');
+      // tailscale が案内する無効化コマンドがあればそれを使う
+      const off = line.match(/tailscale (funnel .*\boff)\s*$/)?.[1];
+      if (off) this.offArgs = off.trim().split(/\s+/);
+      return null;
     },
     // Funnel が未許可の場合は、tailscale 自身が有効化用の URL を表示して待つ
     alwaysShowOutput: true,
@@ -122,9 +131,18 @@ if (version.error) {
 // ---------------------------------------------------------------- サーバー起動
 
 const children = [];
+let funnelActive = false;
+let shuttingDown = false;
 function shutdown(code = 0) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  if (funnelActive) {
+    // バックグラウンド設定の Funnel は明示的に無効にしないと残り続ける
+    const off = spawnSync(provider.bin, provider.offArgs, { encoding: 'utf8' });
+    if (off.status === 0) console.log('Tailscale Funnel を無効にしました');
+    else console.error(`Funnel を無効にできませんでした。手動で実行してください: tailscale ${provider.offArgs.join(' ')}`);
+  }
   for (const child of children) if (child.exitCode === null) child.kill('SIGINT');
-  // tailscale funnel は SIGINT で Funnel を無効に戻してから終了する。少し待ってから抜ける
   setTimeout(() => process.exit(code), 500).unref();
 }
 process.on('SIGINT', () => shutdown(0));
@@ -213,6 +231,12 @@ for (const stream of [tunnel.stdout, tunnel.stderr]) {
 }
 
 tunnel.on('exit', (code) => {
+  // バックグラウンド設定型（Tailscale）: 設定が済むとコマンドは正常終了する
+  if (provider.background && code === 0) {
+    funnelActive = true;
+    announce(provider.state.url);
+    return;
+  }
   console.error(`${provider.name} が停止しました（終了コード ${code}）`);
   if (!announced && !provider.alwaysShowOutput) console.error(recent.join('\n'));
   shutdown(code ?? 1);
