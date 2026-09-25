@@ -142,6 +142,9 @@ $env:ADMIN_PASSWORD="十分に長いパスワード"; npm run public:tailscale
 - 停止は `Ctrl+C`（サーバーと Funnel の両方が止まります）。
 - URL の `<PC名>` の部分は、Tailscale の管理画面（Machines → 対象の PC → Edit machine name）で `face-history` などに変更できます。
 - Funnel のこの使い方には Tailscale 1.52 以降が必要です。
+- `listener already exists for port 443` と表示されて止まる場合は、以前の Funnel / Serve の設定が残っています。Windows なら `Stop-Process -Name tailscale -ErrorAction SilentlyContinue` → `tailscale serve reset` を実行してから再度起動してください（この PC の Serve / Funnel 設定がすべて消去されます）。
+- 異常終了などで Funnel が残った場合は `tailscale funnel --https=443 off` で無効にできます。
+- Windows では、公開中の PowerShell の画面をクリックすると「選択」モードになり処理が一時停止します。タイトルに「選択」と出たら `Esc` で解除してください。
 
 ### スマートフォンから使う（HTTPS）
 

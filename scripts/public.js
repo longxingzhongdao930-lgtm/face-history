@@ -239,5 +239,18 @@ tunnel.on('exit', (code) => {
   }
   console.error(`${provider.name} が停止しました（終了コード ${code}）`);
   if (!announced && !provider.alwaysShowOutput) console.error(recent.join('\n'));
+  if (providerName === 'tailscale' && recent.some((l) => /listener already exists/.test(l))) {
+    // 以前の Funnel（フォアグラウンド実行の残りや別の設定）が 443 番を使っている
+    console.error(
+      [
+        '',
+        '以前の Tailscale Funnel / Serve の設定が残っています。次を実行してから、もう一度起動してください。',
+        isWindows ? '  Stop-Process -Name tailscale -ErrorAction SilentlyContinue' : '  pkill -x tailscale',
+        '  tailscale serve reset',
+        '',
+        '（tailscale serve reset は、この PC の Tailscale Serve / Funnel の設定をすべて消去します）',
+      ].join('\n'),
+    );
+  }
   shutdown(code ?? 1);
 });
