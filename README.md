@@ -130,6 +130,10 @@ ADMIN_PASSWORD='十分に長いパスワード' TUNNEL_TOKEN='控えたトーク
 
 **2. 公開する**
 
+**Windows はダブルクリックで起動できます。** フォルダ内の `start-public.bat` をダブルクリックすると、最新版への更新（`git pull`）→ 公開までを自動で行います。初回だけ管理者パスワードを聞かれ、`.env` に保存されます（GitHub には上がりません）。デスクトップにショートカットを作っておくと便利です（右クリック → 送る → デスクトップ）。
+
+ターミナルから起動する場合:
+
 ```bash
 # Mac / Linux
 ADMIN_PASSWORD='十分に長いパスワード' npm run public:tailscale
@@ -164,6 +168,8 @@ TLS_CERT=./192.168.1.10+1.pem TLS_KEY=./192.168.1.10+1-key.pem npm start
 スマートフォン側で証明書を信頼するには、mkcert のルート証明書（`mkcert -CAROOT` の場所にある `rootCA.pem`）を端末にインストールしてください。nginx などのリバースプロキシで HTTPS 化する場合は、`TRUST_PROXY=1` を設定してください。
 
 ## 設定（環境変数）
+
+`npm run public` / `npm run public:tailscale` は、プロジェクト直下の `.env` ファイル（例: `ADMIN_PASSWORD="..."`）も読み込みます。環境変数が優先されます。
 
 | 変数 | 既定値 | 説明 |
 | --- | --- | --- |

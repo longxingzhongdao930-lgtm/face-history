@@ -8,10 +8,15 @@
 //                                                 → Cloudflare: ダッシュボードで設定した固定 URL
 //   ADMIN_PASSWORD=... npm run public:tailscale   → Tailscale Funnel: https://<PC名>.<tailnet>.ts.net（固定）
 import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
+import readline from 'node:readline/promises';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+// 管理者パスワード等は <ROOT>/.env に保存できる（.gitignore 済み。環境変数が優先）
+const ENV_FILE = path.join(ROOT, '.env');
+if (fs.existsSync(ENV_FILE)) process.loadEnvFile(ENV_FILE);
 const PORT = process.env.PORT ?? '3000';
 const isWindows = process.platform === 'win32';
 const LOG = process.env.TUNNEL_LOG === '1' || process.env.CLOUDFLARED_LOG === '1';
@@ -105,6 +110,28 @@ if (!provider) fail([`TUNNEL は cloudflare または tailscale を指定して�
 
 // ---------------------------------------------------------------- 事前チェック
 
+/** 初回はパスワードを入力してもらい .env に保存する（ダブルクリック起動向け） */
+async function askPassword() {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    console.log('\n管理者パスワードを決めてください（8 文字以上）。登録・履歴・ユーザー管理のログインに使います。');
+    for (;;) {
+      const answer = (await rl.question('管理者パスワード: ')).trim();
+      if (answer.length >= 8 && !/[\r\n"]/.test(answer)) {
+        fs.appendFileSync(ENV_FILE, `${fs.existsSync(ENV_FILE) ? '\n' : ''}ADMIN_PASSWORD="${answer}"\n`);
+        console.log(`保存しました（${ENV_FILE}）。次回からは入力不要です。\n`);
+        return answer;
+      }
+      console.log('8 文字以上で入力してください（" は使えません）。');
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+if ((process.env.ADMIN_PASSWORD ?? '').length < 8 && process.stdin.isTTY) {
+  process.env.ADMIN_PASSWORD = await askPassword();
+}
 const password = process.env.ADMIN_PASSWORD ?? '';
 if (password.length < 8) {
   const script = providerName === 'tailscale' ? 'npm run public:tailscale' : 'npm run public';
